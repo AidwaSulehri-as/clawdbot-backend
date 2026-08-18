@@ -1,19 +1,21 @@
 """
 =====================================================================
- nlp_utils.py — the actual "understand what the user typed" logic.
+ nlp_utils.py — the "understand what the user typed" logic.
 
- Today's job: take free text like
-     "remind me to take medicine tomorrow at 6pm"
- and pull out:
-     task = "take medicine"
-     date = "2026-08-19"
-     time = "18:00"
+ UPDATED Aug 18: dateparser's automatic phrase-detection sometimes
+ misses obvious dates (like a lone "Friday") or matches noisy
+ fragments inside unrelated words. To make this more reliable, we now
+ only TRUST a matched phrase if it contains a recognizable date/time
+ KEYWORD (like "tomorrow", "friday", "6pm", a digit, etc.) - this is
+ a whitelist approach, safer than trying to guess every possible way
+ dateparser might misfire.
 =====================================================================
 """
 
 from dateparser.search import search_dates
 import dateparser
 from datetime import datetime
+import re
 
 
 FILLER_PREFIXES = [
@@ -28,12 +30,39 @@ FILLER_PREFIXES = [
     "don't forget to",
 ]
 
-MIN_MATCH_LENGTH = 3
-
 TRAILING_CONNECTORS = {"at", "on", "in", "by", "for"}
+
+DATE_KEYWORDS = {
+    "today", "tomorrow", "tonight", "yesterday", "now",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    "next", "last", "this", "coming", "upcoming",
+    "week", "weeks", "month", "months", "year", "years",
+    "day", "days", "hour", "hours", "minute", "minutes",
+    "am", "pm", "noon", "midnight",
+    "morning", "afternoon", "evening", "night",
+}
+
+
+def _looks_like_real_date(phrase: str) -> bool:
+    """Returns True only if the phrase contains a recognizable
+    date/time keyword or a digit - our safety filter."""
+    if re.search(r"\d", phrase):
+        return True
+    words = re.findall(r"[a-zA-Z]+", phrase.lower())
+    return any(word in DATE_KEYWORDS for word in words)
 
 
 def extract_reminder(text: str) -> dict:
+    """
+    Takes raw user text, returns a dictionary with
+    task/date/time/confidence — matching the ParseReminderResponse
+    shape in models.py.
+    """
+
     found = search_dates(
         text,
         settings={"PREFER_DATES_FROM": "future"},
@@ -41,7 +70,7 @@ def extract_reminder(text: str) -> dict:
 
     good_matches = [
         (phrase, dt) for phrase, dt in found
-        if len(phrase.strip()) >= MIN_MATCH_LENGTH
+        if len(phrase.strip()) >= 3 and _looks_like_real_date(phrase)
     ]
 
     parsed_datetime = None
@@ -63,6 +92,18 @@ def extract_reminder(text: str) -> dict:
             )
             matched_phrases = [longest_phrase]
 
+    if not parsed_datetime:
+        words = re.findall(r"[a-zA-Z]+", text.lower())
+        for word in words:
+            if word in DATE_KEYWORDS and word not in TRAILING_CONNECTORS:
+                candidate = dateparser.parse(
+                    word, settings={"PREFER_DATES_FROM": "future"}
+                )
+                if candidate:
+                    parsed_datetime = candidate
+                    matched_phrases = [word]
+                    break
+
     if parsed_datetime:
         confidence = 0.85
     else:
@@ -72,7 +113,7 @@ def extract_reminder(text: str) -> dict:
 
     task_text = text
     for phrase in matched_phrases:
-        task_text = task_text.replace(phrase, "")
+        task_text = re.sub(re.escape(phrase), "", task_text, flags=re.IGNORECASE)
 
     task_text_lower = task_text.lower().strip()
     for prefix in FILLER_PREFIXES:
