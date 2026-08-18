@@ -2,11 +2,6 @@
 =====================================================================
  main.py — the actual FastAPI SERVER file.
 
- This is the file you "run" to start your backend. When it's running,
- it listens for incoming web requests (like a mini website, but it
- returns JSON data instead of HTML pages) and responds according to
- the functions below.
-
  HOW TO RUN THIS FILE:
    uvicorn app.main:app --host 0.0.0.0 --port 8000
 =====================================================================
@@ -26,6 +21,7 @@ from app.models import (
 )
 
 from app.nlp_utils import extract_reminder
+from app.chat_engine import handle_chat
 
 app = FastAPI(
     title="Clawd Bot Backend",
@@ -50,22 +46,16 @@ def health_check():
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     """
-    STUB for Aug 13 - always returns a fixed sample response so Person B
-    can build the chat UI today without waiting on real NLP.
-    Real intent recognition (spaCy/NLTK) gets built Aug 19.
+    Takes a user message (typed, or transcribed from voice), figures
+    out the intent (create_reminder, find_object, find_note,
+    list_tasks, or general_chat), and returns a natural-language
+    reply plus an optional action for the app to execute locally.
+
+    UPDATED Aug 19: this is now REAL intent recognition (see
+    app/chat_engine.py), not a stub anymore.
     """
-    return ChatResponse(
-        reply=f"(stub) I heard: '{request.message}'. Real NLP coming Aug 19.",
-        action=ReminderAction(
-            action="create_reminder",
-            data={
-                "task": "Sample reminder",
-                "date": "2026-08-14",
-                "time": "18:00",
-                "priority": "yellow",
-            },
-        ),
-    )
+    result = handle_chat(request.message)
+    return ChatResponse(**result)
 
 
 @app.post("/parse_reminder", response_model=ParseReminderResponse)
@@ -73,9 +63,6 @@ def parse_reminder(request: ParseReminderRequest):
     """
     Takes free text like "remind me to take medicine tomorrow at 6pm"
     and extracts a structured task/date/time.
-
-    UPDATED Aug 15: this is now REAL logic (see app/nlp_utils.py),
-    not a stub anymore.
     """
     result = extract_reminder(request.text)
     return ParseReminderResponse(**result)
@@ -84,7 +71,8 @@ def parse_reminder(request: ParseReminderRequest):
 @app.get("/suggestions", response_model=SuggestionsResponse)
 def suggestions(user_id: str = "default"):
     """
-    STUB for Aug 13. Real frequency/timing rule logic gets built Aug 23.
+    STUB. Real frequency/timing rule logic (see app/suggestion_engine.py)
+    gets wired in on Aug 23 once the app can send its reminder history.
     """
     return SuggestionsResponse(
         suggestions=[

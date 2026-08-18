@@ -11,10 +11,6 @@
    1. Checks incoming requests match the shape (rejects bad data)
    2. Converts your Python objects into JSON to send back
    3. Generates the interactive docs page (/docs) for free
-
- You don't need to understand Pydantic deeply today — just know:
- each "class SomethingRequest(BaseModel):" block below describes
- one JSON shape, field by field.
 =====================================================================
 """
 
@@ -39,10 +35,17 @@ class ChatRequest(BaseModel):
 class ReminderAction(BaseModel):
     """
     Sometimes, after chatting, the app needs to DO something — like
-    saving a new reminder to the phone's local database. This shape
-    describes that instruction.
+    saving a new reminder, or searching for an object/note/task list.
+    This shape describes that instruction.
+
+    UPDATED Aug 19: added find_object, find_note, and list_tasks as
+    valid actions, alongside the original create_reminder/create_note.
+
+    Example:
+        { "action": "create_reminder",
+          "data": { "task": "take medicine", "date": "2026-08-14", "time": "18:00" } }
     """
-    action: Literal["create_reminder", "create_note", "none"]
+    action: Literal["create_reminder", "create_note", "find_object", "find_note", "list_tasks", "none"]
     data: dict[str, Any]
 
 
