@@ -3,29 +3,12 @@
  chat_engine.py — the core "understand what the user wants" logic
  for the /chat endpoint. This is the chatbot's brain.
 
- THE IDEA IN PLAIN ENGLISH:
- A user might type all kinds of things: "remind me to call mom",
- "where are my keys", "what do I have today", or just "hi". We need
- to figure out WHICH of these categories (an "intent") the message
- falls into, then respond appropriately.
-
- We use simple KEYWORD MATCHING for this, not a trained ML model -
- this is the same "pre-trained model + rule-based logic" approach
- used in nlp_utils.py and suggestion_engine.py, consistent with our
- Phase 1 scope.
-
  THE 5 INTENTS WE RECOGNIZE:
    1. create_reminder - "remind me to...", "don't forget to..."
    2. find_object      - "where is my...", "where are my..."
    3. find_note        - "what did I write about...", "find my note..."
    4. list_tasks        - "what do I have today", "show my reminders"
    5. general_chat       - anything else (greetings, small talk, etc.)
-
- IMPORTANT: for find_object, find_note, and list_tasks, the actual
- DATA lives on the phone (local sqflite database), not on this
- backend. So for these intents, we just recognize WHAT the user
- wants, and send back an "action" telling the Flutter app to search
- its local data - the app does the actual lookup.
 =====================================================================
 """
 
@@ -36,12 +19,6 @@ CREATE_REMINDER_KEYWORDS = [
     "remind me", "set a reminder", "don't forget",
     "need to remember", "please remind",
 ]
-# NOTE (Aug 20 fix): removed bare "reminder" from this list - it was
-# matching inside the word "reminders" too, causing QUESTIONS like
-# "what reminders do I have?" to be misread as a COMMAND to create
-# one, silently saving garbage data. Every phrase left in this list
-# is a genuine instruction to create something, not just a mention
-# of the word "reminder".
 
 FIND_OBJECT_KEYWORDS = [
     "where is", "where's", "where are", "find my", "locate my",
@@ -66,11 +43,6 @@ QUERY_FILLER_WORDS = {"my", "the", "is", "are", "a", "an"}
 
 
 def _extract_query(text: str, matched_keyword: str) -> str:
-    """
-    After we know WHICH keyword phrase matched (e.g. "where are"),
-    this pulls out whatever comes after it as the actual search term
-    (e.g. "my keys" -> "keys").
-    """
     lower_text = text.lower()
     idx = lower_text.find(matched_keyword)
     remainder = text[idx + len(matched_keyword):].strip()
@@ -81,7 +53,6 @@ def _extract_query(text: str, matched_keyword: str) -> str:
 
 
 def _find_matching_keyword(text_lower: str, keyword_list: list[str]) -> str | None:
-    """Returns the first keyword from the list found in the text, or None."""
     for keyword in keyword_list:
         if keyword in text_lower:
             return keyword
@@ -89,21 +60,15 @@ def _find_matching_keyword(text_lower: str, keyword_list: list[str]) -> str | No
 
 
 def handle_chat(message: str) -> dict:
-    """
-    The main function. Takes the user's raw message, figures out the
-    intent, and returns a dict with 'reply' (text to show/speak) and
-    'action' (instruction for the app, or None for plain conversation).
-    """
     text_lower = message.lower().strip()
 
-    # ---- Check each intent in priority order ----
-    # UPDATED Aug 20: list_tasks/find_object/find_note are now checked
-    # BEFORE create_reminder. This matters because create_reminder
-    # WRITES data to the database - if a question gets misread as a
-    # command, it silently saves garbage. Checking the "safe" (read-
-    # only) intents first, and making create_reminder the last resort,
-    # means an ambiguous message is far more likely to fall through to
-    # a harmless "I don't understand" than to create bad data.
+    # ---- Aug 21 hardening: handle empty/near-empty input specially ----
+    if len(text_lower) < 2:
+        return {
+            "reply": "I didn't catch that — could you tell me a bit more? "
+                     "I can set reminders, find things you've saved, or show your tasks.",
+            "action": None,
+        }
 
     keyword = _find_matching_keyword(text_lower, LIST_TASKS_KEYWORDS)
     if keyword:
@@ -154,7 +119,6 @@ def handle_chat(message: str) -> dict:
             },
         }
 
-    # ---- Nothing matched - general conversation ----
     return {
         "reply": _general_chat_reply(text_lower),
         "action": None,
@@ -162,11 +126,6 @@ def handle_chat(message: str) -> dict:
 
 
 def _general_chat_reply(text_lower: str) -> str:
-    """
-    Simple canned responses for casual conversation. Not a trained
-    conversational model - just friendly, honest, predictable replies
-    for a Phase 1 demo. Real open-ended conversation is future work.
-    """
     if any(greeting in text_lower for greeting in ["hi", "hello", "hey"]):
         return "Hi! I'm Clawd Bot. You can ask me to set reminders, find things you've saved, or show your tasks."
     if "thank" in text_lower:
