@@ -33,9 +33,15 @@ from app.nlp_utils import extract_reminder
 
 
 CREATE_REMINDER_KEYWORDS = [
-    "remind me", "reminder", "set a reminder", "don't forget",
+    "remind me", "set a reminder", "don't forget",
     "need to remember", "please remind",
 ]
+# NOTE (Aug 20 fix): removed bare "reminder" from this list - it was
+# matching inside the word "reminders" too, causing QUESTIONS like
+# "what reminders do I have?" to be misread as a COMMAND to create
+# one, silently saving garbage data. Every phrase left in this list
+# is a genuine instruction to create something, not just a mention
+# of the word "reminder".
 
 FIND_OBJECT_KEYWORDS = [
     "where is", "where's", "where are", "find my", "locate my",
@@ -52,6 +58,8 @@ LIST_TASKS_KEYWORDS = [
     "what's on my schedule", "whats on my schedule",
     "what are my reminders", "show me my reminders", "list reminders",
     "what do i have today", "what's on today",
+    "what reminders", "reminders do i have", "reminders have i set",
+    "what have i set", "what i have to do",
 ]
 
 QUERY_FILLER_WORDS = {"my", "the", "is", "are", "a", "an"}
@@ -88,20 +96,22 @@ def handle_chat(message: str) -> dict:
     """
     text_lower = message.lower().strip()
 
-    keyword = _find_matching_keyword(text_lower, CREATE_REMINDER_KEYWORDS)
+    # ---- Check each intent in priority order ----
+    # UPDATED Aug 20: list_tasks/find_object/find_note are now checked
+    # BEFORE create_reminder. This matters because create_reminder
+    # WRITES data to the database - if a question gets misread as a
+    # command, it silently saves garbage. Checking the "safe" (read-
+    # only) intents first, and making create_reminder the last resort,
+    # means an ambiguous message is far more likely to fall through to
+    # a harmless "I don't understand" than to create bad data.
+
+    keyword = _find_matching_keyword(text_lower, LIST_TASKS_KEYWORDS)
     if keyword:
-        parsed = extract_reminder(message)
-        reply = f"Got it — I'll remind you to {parsed['task']} on {parsed['date']} at {parsed['time']}."
         return {
-            "reply": reply,
+            "reply": "Here's what you've got coming up.",
             "action": {
-                "action": "create_reminder",
-                "data": {
-                    "task": parsed["task"],
-                    "date": parsed["date"],
-                    "time": parsed["time"],
-                    "priority": "yellow",
-                },
+                "action": "list_tasks",
+                "data": {},
             },
         }
 
@@ -127,16 +137,24 @@ def handle_chat(message: str) -> dict:
             },
         }
 
-    keyword = _find_matching_keyword(text_lower, LIST_TASKS_KEYWORDS)
+    keyword = _find_matching_keyword(text_lower, CREATE_REMINDER_KEYWORDS)
     if keyword:
+        parsed = extract_reminder(message)
+        reply = f"Got it — I'll remind you to {parsed['task']} on {parsed['date']} at {parsed['time']}."
         return {
-            "reply": "Here's what you've got coming up.",
+            "reply": reply,
             "action": {
-                "action": "list_tasks",
-                "data": {},
+                "action": "create_reminder",
+                "data": {
+                    "task": parsed["task"],
+                    "date": parsed["date"],
+                    "time": parsed["time"],
+                    "priority": "yellow",
+                },
             },
         }
 
+    # ---- Nothing matched - general conversation ----
     return {
         "reply": _general_chat_reply(text_lower),
         "action": None,
