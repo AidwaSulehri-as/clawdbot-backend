@@ -1,14 +1,6 @@
 """
 =====================================================================
  nlp_utils.py — the "understand what the user typed" logic.
-
- UPDATED Aug 18: dateparser's automatic phrase-detection sometimes
- misses obvious dates (like a lone "Friday") or matches noisy
- fragments inside unrelated words. To make this more reliable, we now
- only TRUST a matched phrase if it contains a recognizable date/time
- KEYWORD (like "tomorrow", "friday", "6pm", a digit, etc.) - this is
- a whitelist approach, safer than trying to guess every possible way
- dateparser might misfire.
 =====================================================================
 """
 
@@ -48,8 +40,6 @@ DATE_KEYWORDS = {
 
 
 def _looks_like_real_date(phrase: str) -> bool:
-    """Returns True only if the phrase contains a recognizable
-    date/time keyword or a digit - our safety filter."""
     if re.search(r"\d", phrase):
         return True
     words = re.findall(r"[a-zA-Z]+", phrase.lower())
@@ -57,12 +47,6 @@ def _looks_like_real_date(phrase: str) -> bool:
 
 
 def extract_reminder(text: str) -> dict:
-    """
-    Takes raw user text, returns a dictionary with
-    task/date/time/confidence — matching the ParseReminderResponse
-    shape in models.py.
-    """
-
     found = search_dates(
         text,
         settings={"PREFER_DATES_FROM": "future"},
@@ -115,11 +99,16 @@ def extract_reminder(text: str) -> dict:
     for phrase in matched_phrases:
         task_text = re.sub(re.escape(phrase), "", task_text, flags=re.IGNORECASE)
 
-    task_text_lower = task_text.lower().strip()
+    task_text_lower = task_text.lower()
+    best_cut_index = -1
     for prefix in FILLER_PREFIXES:
-        if task_text_lower.startswith(prefix):
-            task_text = task_text[len(prefix):].strip()
-            break
+        idx = task_text_lower.find(prefix)
+        if idx != -1:
+            end_of_prefix = idx + len(prefix)
+            if end_of_prefix > best_cut_index:
+                best_cut_index = end_of_prefix
+    if best_cut_index != -1:
+        task_text = task_text[best_cut_index:].strip()
 
     task_text = " ".join(task_text.split())
     task_text = task_text.strip(" ,.-")

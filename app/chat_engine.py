@@ -23,6 +23,7 @@ CREATE_REMINDER_KEYWORDS = [
 FIND_OBJECT_KEYWORDS = [
     "where is", "where's", "where are", "find my", "locate my",
     "i lost", "can't find", "cant find",
+    "where did i put", "where did i leave", "where did i keep",
 ]
 
 FIND_NOTE_KEYWORDS = [
@@ -62,7 +63,6 @@ def _find_matching_keyword(text_lower: str, keyword_list: list[str]) -> str | No
 def handle_chat(message: str) -> dict:
     text_lower = message.lower().strip()
 
-    # ---- Aug 21 hardening: handle empty/near-empty input specially ----
     if len(text_lower) < 2:
         return {
             "reply": "I didn't catch that — could you tell me a bit more? "
