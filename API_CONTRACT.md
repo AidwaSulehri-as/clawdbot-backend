@@ -20,10 +20,12 @@ action.action can be one of:
 Request: { "text": "remind me to take medicine tomorrow at 6pm" }
 Response: { "task": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "confidence": 0.0 }
 
-## GET /suggestions?user_id=default
+## POST /suggestions
+Request: { "user_id": "default", "reminder_history": [ { "task": "take medicine", "date": "YYYY-MM-DD", "time": "HH:MM" } ] }
 Response: { "suggestions": [ { "text": "...", "priority": "green" } ] }
 priority is one of green | yellow | red.
-STILL A STUB as of Aug 19 - real logic wires in Aug 23.
+
+UPDATED Aug 23: changed from GET to POST. The app must now send its own reminder history (task/date/time for each past reminder) in the request body - the backend has no access to the phone's local database, so it can only find patterns in whatever history the app sends it. This is REAL logic now, not a stub.
 
 ## Notes for Person B
 - All dates are ISO format (YYYY-MM-DD), all times are 24-hour (HH:MM).

@@ -15,6 +15,7 @@ from app.models import (
     ChatResponse,
     ParseReminderRequest,
     ParseReminderResponse,
+    SuggestionsRequest,
     SuggestionsResponse,
     Suggestion,
     ReminderAction,
@@ -22,6 +23,7 @@ from app.models import (
 
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
+from app.suggestion_engine import analyze_patterns
 
 app = FastAPI(
     title="Clawd Bot Backend",
@@ -50,9 +52,6 @@ def chat(request: ChatRequest):
     out the intent (create_reminder, find_object, find_note,
     list_tasks, or general_chat), and returns a natural-language
     reply plus an optional action for the app to execute locally.
-
-    UPDATED Aug 19: this is now REAL intent recognition (see
-    app/chat_engine.py), not a stub anymore.
     """
     result = handle_chat(request.message)
     return ChatResponse(**result)
@@ -68,17 +67,25 @@ def parse_reminder(request: ParseReminderRequest):
     return ParseReminderResponse(**result)
 
 
-@app.get("/suggestions", response_model=SuggestionsResponse)
-def suggestions(user_id: str = "default"):
+@app.post("/suggestions", response_model=SuggestionsResponse)
+def suggestions(request: SuggestionsRequest):
     """
-    STUB. Real frequency/timing rule logic (see app/suggestion_engine.py)
-    gets wired in on Aug 23 once the app can send its reminder history.
+    Takes the user's reminder history (sent by the app, since that
+    data lives in the phone's local database, not here) and looks for
+    repeating patterns using the rule-based logic in
+    app/suggestion_engine.py.
+
+    UPDATED Aug 23: this is now REAL logic, not a stub. Also changed
+    from GET to POST, since a GET request has no good way to carry a
+    whole list of past reminders in its body.
     """
+    history_as_dicts = [
+        {"task": item.task, "date": item.date, "time": item.time}
+        for item in request.reminder_history
+    ]
+
+    results = analyze_patterns(history_as_dicts)
+
     return SuggestionsResponse(
-        suggestions=[
-            Suggestion(
-                text="(stub) You usually set a reminder around this time.",
-                priority="green",
-            )
-        ]
+        suggestions=[Suggestion(**s) for s in results]
     )
