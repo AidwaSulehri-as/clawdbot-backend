@@ -21,11 +21,7 @@ Request: { "text": "remind me to take medicine tomorrow at 6pm" }
 Response: { "task": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "confidence": 0.0 }
 
 ## POST /suggestions
-Request: { "user_id": "default", "reminder_history": [ { "task": "take medicine", "date": "YYYY-MM-DD", "time": "HH:MM" } ] }
-Response: { "suggestions": [ { "text": "...", "priority": "green" } ] }
-priority is one of green | yellow | red.
-
-UPDATED Aug 23: changed from GET to POST. The app must now send its own reminder history (task/date/time for each past reminder) in the request body - the backend has no access to the phone's local database, so it can only find patterns in whatever history the app sends it. This is REAL logic now, not a stub.
+ Request: { "user_id": "default", "reminder_history": [ { "task": "take medicine", "date": "YYYY-MM-DD", "time": "HH:MM" } ], "nearby_object": "medicine" } Response: { "suggestions": [ { "text": "...", "priority": "green" } ] } priority is one of green | yellow | red. nearby_object is OPTIONAL - only send it when the app's on-device geolocator detects the user is near a saved location. It boosts priority when the object's name shares a word with a matching reminder's task text (e.g. "medicine" matches task "buy medicine"). Text-based matching only - "pharmacy" would NOT match "buy medicine" since they share no words.
 
 ## Notes for Person B
 - All dates are ISO format (YYYY-MM-DD), all times are 24-hour (HH:MM).

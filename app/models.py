@@ -9,10 +9,6 @@ from typing import Optional, Literal, Any
 from pydantic import BaseModel
 
 
-# =====================================================================
-# SECTION 1: Shapes used by the  /chat  endpoint
-# =====================================================================
-
 class ChatRequest(BaseModel):
     message: str
     user_id: str = "default"
@@ -28,10 +24,6 @@ class ChatResponse(BaseModel):
     action: Optional[ReminderAction] = None
 
 
-# =====================================================================
-# SECTION 2: Shapes used by the  /parse_reminder  endpoint
-# =====================================================================
-
 class ParseReminderRequest(BaseModel):
     text: str
 
@@ -43,31 +35,22 @@ class ParseReminderResponse(BaseModel):
     confidence: float
 
 
-# =====================================================================
-# SECTION 3: Shapes used by the  /suggestions  endpoint
-# =====================================================================
-
 class ReminderHistoryItem(BaseModel):
-    """
-    One past reminder, sent by the app so the backend can look for
-    patterns in it. This data lives on the PHONE (local sqflite), not
-    here on the server - the app sends its own history along with
-    each /suggestions request.
-    """
     task: str
-    date: str   # YYYY-MM-DD
-    time: str   # HH:MM
+    date: str
+    time: str
 
 
 class SuggestionsRequest(BaseModel):
     """
-    UPDATED Aug 23: /suggestions changed from GET to POST, because it
-    now needs the app to actually SEND its reminder history for the
-    backend to analyze - a GET request has no good way to carry a
-    whole list of past reminders.
+    UPDATED Aug 24: added optional nearby_object - when the app's
+    on-device geolocator detects the user is near a saved location,
+    it sends that object's name here so the backend can factor it
+    into suggestion priority. None/omitted if no location match.
     """
     user_id: str = "default"
     reminder_history: list[ReminderHistoryItem] = []
+    nearby_object: str | None = None
 
 
 class Suggestion(BaseModel):

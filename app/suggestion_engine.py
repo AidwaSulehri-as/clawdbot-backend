@@ -3,22 +3,8 @@
  suggestion_engine.py — the "notice patterns in what the user does"
  logic. This is the brain behind Clawd Bot's proactive suggestions.
 
- IMPORTANT CONTEXT: today (Aug 16) we're only DESIGNING and WRITING
- this logic - it's not wired into the /suggestions API endpoint yet.
- That wiring happens on Aug 23, once Person B's app can actually send
- us the user's reminder history to analyze. Today, we write the
- function and test it with FAKE sample data to prove the logic works.
-
- THE IDEA IN PLAIN ENGLISH:
- If a user has set the same kind of reminder around the same time on
- several different days (e.g. "take medicine" around 6pm, 4 days out
- of the last 7), that's a PATTERN. We surface a suggestion like
- "You often set a reminder for this around this time - want one now?"
-
  This is NOT a trained machine learning model - it's simple counting
- and grouping (statistics), computed fresh every time. That's a
- completely legitimate design choice for Phase 1, and it's honest to
- describe as "pattern-based" rather than "AI/ML".
+ and grouping (statistics), computed fresh every time.
 =====================================================================
 """
 
@@ -26,20 +12,24 @@ from collections import defaultdict
 from datetime import datetime
 
 
-def analyze_patterns(past_reminders: list[dict]) -> list[dict]:
+def analyze_patterns(
+    past_reminders: list[dict],
+    nearby_object: str | None = None,
+) -> list[dict]:
     """
     Takes a list of the user's past reminders and looks for repeating
     patterns, returning a list of suggestion dicts.
 
-    INPUT FORMAT - each item in past_reminders should look like:
-        {
-            "task": "take medicine",
-            "date": "2026-08-10",
-            "time": "18:00",
-        }
+    UPDATED Aug 24: added an optional `nearby_object` parameter. When
+    the app detects the user is physically near a saved location
+    (e.g. "pharmacy"), it can pass that object's name here. Location
+    DETECTION happens entirely on the phone via geolocator - the
+    backend just factors the match into suggestion priority.
 
-    OUTPUT FORMAT - a list of dicts matching our Suggestion shape:
-        {"text": "...", "priority": "green" | "yellow" | "red"}
+    NOTE: matching is purely text-based (does the object name share a
+    word with the task?). "medicine" matches task "buy medicine", but
+    "pharmacy" would NOT match "buy medicine" since they share no
+    words - a known Phase 1 limitation (no semantic understanding).
     """
 
     grouped_by_task = defaultdict(list)
@@ -77,14 +67,49 @@ def analyze_patterns(past_reminders: list[dict]) -> list[dict]:
             hour_12 = 12 if hour_12 == 0 else hour_12
             am_pm = "AM" if most_common_hour < 12 else "PM"
 
-            suggestions.append({
-                "text": (
+            task_lower = reminders_for_task[0]["task"].lower()
+            if nearby_object and (
+                nearby_object.lower() in task_lower
+                or task_lower in nearby_object.lower()
+            ):
+                priority = "red"
+                suggestion_text = (
+                    f"You're near '{nearby_object}' and often set a "
+                    f"reminder for '{reminders_for_task[0]['task']}' "
+                    f"around {hour_12} {am_pm}. Want to set one now?"
+                )
+            else:
+                suggestion_text = (
                     f"You often set a reminder for "
                     f"'{reminders_for_task[0]['task']}' around "
                     f"{hour_12} {am_pm}. Want to set one now?"
-                ),
+                )
+
+            suggestions.append({
+                "text": suggestion_text,
                 "priority": priority,
             })
+
+    if nearby_object:
+        already_suggested = any(
+            nearby_object.lower() in s["text"].lower() for s in suggestions
+        )
+        if not already_suggested:
+            for reminder in past_reminders:
+                task_lower = reminder["task"].lower()
+                if (
+                    nearby_object.lower() in task_lower
+                    or task_lower in nearby_object.lower()
+                ):
+                    suggestions.append({
+                        "text": (
+                            f"You're near '{nearby_object}' — you have a "
+                            f"reminder for '{reminder['task']}' saved. "
+                            f"Want to check it now?"
+                        ),
+                        "priority": "green",
+                    })
+                    break
 
     return suggestions
 

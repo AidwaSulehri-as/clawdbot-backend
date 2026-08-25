@@ -75,16 +75,15 @@ def suggestions(request: SuggestionsRequest):
     repeating patterns using the rule-based logic in
     app/suggestion_engine.py.
 
-    UPDATED Aug 23: this is now REAL logic, not a stub. Also changed
-    from GET to POST, since a GET request has no good way to carry a
-    whole list of past reminders in its body.
+    UPDATED Aug 24: now also accepts an optional nearby_object from
+    the app's on-device location check, factored into priority.
     """
     history_as_dicts = [
         {"task": item.task, "date": item.date, "time": item.time}
         for item in request.reminder_history
     ]
 
-    results = analyze_patterns(history_as_dicts)
+    results = analyze_patterns(history_as_dicts, nearby_object=request.nearby_object)
 
     return SuggestionsResponse(
         suggestions=[Suggestion(**s) for s in results]
