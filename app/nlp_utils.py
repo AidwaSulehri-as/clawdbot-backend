@@ -130,7 +130,15 @@ def extract_reminder(text: str) -> dict:
                 if candidate:
                     parsed_datetime = candidate
                     matched_phrases = [word]
-                    removal_phrases = [word]
+                    # UPDATED Aug 26 (second fix): apply the same
+                    # qualifier-word extension here too. This fallback
+                    # path runs when search_dates only found noise
+                    # (like matching "to"/"on" instead of "Tuesday"),
+                    # so a lone keyword gets found this way instead -
+                    # but without this line, a qualifier word right
+                    # before it (e.g. "coming Tuesday") would be
+                    # missed here just like it was in the main path.
+                    removal_phrases = [_extend_with_qualifier(text, word)]
                     break
 
     if parsed_datetime:
