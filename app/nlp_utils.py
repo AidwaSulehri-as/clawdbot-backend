@@ -38,6 +38,8 @@ DATE_KEYWORDS = {
     "morning", "afternoon", "evening", "night",
 }
 
+QUALIFIER_WORDS = {"next", "last", "this", "coming", "upcoming"}
+
 
 def _looks_like_real_date(phrase: str) -> bool:
     if re.search(r"\d", phrase):
@@ -46,7 +48,29 @@ def _looks_like_real_date(phrase: str) -> bool:
     return any(word in DATE_KEYWORDS for word in words)
 
 
+def _extend_with_qualifier(text: str, phrase: str) -> str:
+    """
+    If a qualifier word (like "next", "last", "this") sits right
+    before this matched phrase in the original text, returns the
+    phrase WITH that qualifier attached - purely for cleanly removing
+    it from the task text later. Does NOT affect date calculation.
+    """
+    idx = text.lower().find(phrase.lower())
+    if idx > 0:
+        preceding_text = text[:idx].rstrip()
+        preceding_words = preceding_text.split()
+        if preceding_words and preceding_words[-1].lower() in QUALIFIER_WORDS:
+            return f"{preceding_words[-1]} {phrase}"
+    return phrase
+
+
 def extract_reminder(text: str) -> dict:
+    """
+    Takes raw user text, returns a dictionary with
+    task/date/time/confidence — matching the ParseReminderResponse
+    shape in models.py.
+    """
+
     found = search_dates(
         text,
         settings={"PREFER_DATES_FROM": "future"},
@@ -58,7 +82,13 @@ def extract_reminder(text: str) -> dict:
     ]
 
     parsed_datetime = None
+    # matched_phrases holds the ORIGINAL phrases (used for date math).
     matched_phrases = []
+    # removal_phrases holds the qualifier-EXTENDED versions (used only
+    # to cleanly strip text from the task) - kept separate so a
+    # failed re-parse of an extended phrase never costs us an
+    # already-correct date (see Aug 26 QA note below).
+    removal_phrases = []
 
     if good_matches:
         good_matches.sort(key=lambda pair: text.find(pair[0]))
@@ -76,6 +106,20 @@ def extract_reminder(text: str) -> dict:
             )
             matched_phrases = [longest_phrase]
 
+        # UPDATED Aug 26 QA fix: build the removal list SEPARATELY
+        # from date calculation. Earlier version tried to re-parse
+        # the qualifier-extended phrase (e.g. "next Monday at 2pm")
+        # to get the date - but dateparser.parse() sometimes fails on
+        # that exact combined form even though the original phrase
+        # ("Monday at 2pm") parsed fine. That failure was silently
+        # discarding our qualifier extension and falling back to the
+        # ORIGINAL phrase without "next" - leaving it dangling in the
+        # task text. Now we keep the date from the original phrase
+        # (which we know already parsed correctly) and use the
+        # extended version ONLY for text removal, which doesn't need
+        # to be re-parsed at all.
+        removal_phrases = [_extend_with_qualifier(text, p) for p in matched_phrases]
+
     if not parsed_datetime:
         words = re.findall(r"[a-zA-Z]+", text.lower())
         for word in words:
@@ -86,6 +130,7 @@ def extract_reminder(text: str) -> dict:
                 if candidate:
                     parsed_datetime = candidate
                     matched_phrases = [word]
+                    removal_phrases = [word]
                     break
 
     if parsed_datetime:
@@ -93,10 +138,10 @@ def extract_reminder(text: str) -> dict:
     else:
         parsed_datetime = datetime.now()
         confidence = 0.2
-        matched_phrases = []
+        removal_phrases = []
 
     task_text = text
-    for phrase in matched_phrases:
+    for phrase in removal_phrases:
         task_text = re.sub(re.escape(phrase), "", task_text, flags=re.IGNORECASE)
 
     task_text_lower = task_text.lower()
