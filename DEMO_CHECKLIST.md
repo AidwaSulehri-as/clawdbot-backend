@@ -2,6 +2,8 @@
 
 ## Before the demo (do this 15-20 minutes early)
 
+**Important: ngrok's free tier session limits vary by version/plan and online reports conflict (some suggest a session may need refreshing after a few hours). Don't assume it will just stay up unattended — always restart server + ngrok fresh shortly before presenting, not hours in advance.**
+
 1. **Start the backend server:**
    ```
    cd C:\Users\DELL\OneDrive\Desktop\clawdbot-backend
