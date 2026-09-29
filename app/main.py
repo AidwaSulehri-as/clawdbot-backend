@@ -7,8 +7,9 @@
 =====================================================================
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from app.models import (
     ChatRequest,
@@ -19,18 +20,29 @@ from app.models import (
     SuggestionsResponse,
     Suggestion,
     ReminderAction,
+    SignupRequest,
+    SignupResponse,
+    LoginRequest,
+    TokenResponse,
 )
 
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
 from app.suggestion_engine import analyze_patterns
 
+from app.database import get_db
+from app.db_models import User
+from app.auth_utils import hash_password, verify_password, create_access_token
+
 app = FastAPI(
     title="Clawd Bot Backend",
     description="NLP chatbot, reminder parsing, and context-aware suggestions for Clawd Bot",
     version="0.1.0",
 )
+from app.database import Base, engine
+from app import db_models
 
+Base.metadata.create_all(bind=engine)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -88,3 +100,53 @@ def suggestions(request: SuggestionsRequest):
     return SuggestionsResponse(
         suggestions=[Suggestion(**s) for s in results]
     )
+
+
+# =====================================================================
+# Phase 2 (Sep 18) — Authentication endpoints
+# =====================================================================
+
+@app.post("/auth/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+def signup(request: SignupRequest, db: Session = Depends(get_db)):
+    """
+    Creates a new user account. Rejects the request if the email is
+    already registered - this is the check the Flutter app's
+    'email already registered' error message comes from.
+    """
+    existing_user = db.query(User).filter(User.email == request.email).first()
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered.",
+        )
+
+    new_user = User(
+        email=request.email,
+        hashed_password=hash_password(request.password),
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return SignupResponse(email=new_user.email)
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Verifies email + password against the stored hash, and returns a
+    signed JWT token on success. The same generic error message is
+    used whether the email doesn't exist OR the password is wrong -
+    this is deliberate: telling an attacker "that email doesn't
+    exist" vs "wrong password" leaks which emails are registered.
+    """
+    user = db.query(User).filter(User.email == request.email).first()
+
+    if user is None or not verify_password(request.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password.",
+        )
+
+    access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
+    return TokenResponse(access_token=access_token)

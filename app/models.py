@@ -60,3 +60,29 @@ class Suggestion(BaseModel):
 
 class SuggestionsResponse(BaseModel):
     suggestions: list[Suggestion]
+
+
+
+     
+# =====================================================================
+# Phase 2 (Sep 18) — Authentication schemas
+# =====================================================================
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SignupResponse(BaseModel):
+    email: str
+    message: str = "Account created successfully."
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
