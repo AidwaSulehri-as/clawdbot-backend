@@ -39,6 +39,10 @@ from app.auth_utils import (
     verify_password,
     create_access_token,
     get_current_user_email,
+    is_locked_out,
+    record_failed_attempt,
+    clear_failed_attempts,
+    LOCKOUT_MINUTES,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -147,15 +151,28 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
     Verifies email + password against the stored hash, and returns a
     signed JWT token on success.
+
+    UPDATED Sep 21: added rate-limiting - after 5 failed attempts on
+    one email within 15 minutes, further attempts are blocked with a
+    429 (Too Many Requests) response, even if the correct password is
+    provided. This stops brute-force password guessing.
     """
+    if is_locked_out(request.email):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Please try again in {LOCKOUT_MINUTES} minutes.",
+        )
+
     user = db.query(User).filter(User.email == request.email).first()
 
     if user is None or not verify_password(request.password, user.hashed_password):
+        record_failed_attempt(request.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",
         )
 
+    clear_failed_attempts(request.email)
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
     return TokenResponse(access_token=access_token)
 
@@ -166,8 +183,7 @@ def read_current_user(
     db: Session = Depends(get_db),
 ):
     """
-    NEW Sep 20: returns the logged-in user's own info, based on their
-    token.
+    Returns the logged-in user's own info, based on their token.
     """
     user = db.query(User).filter(User.email == current_user_email).first()
     if user is None:

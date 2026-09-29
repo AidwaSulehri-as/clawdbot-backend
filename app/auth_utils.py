@@ -115,3 +115,49 @@ def get_current_user_email(
         raise credentials_exception
 
     return email
+
+
+
+
+
+# =====================================================================
+# Sep 21 — Login rate-limiting (brute-force protection).
+#
+# WHY IN-MEMORY, NOT A DATABASE TABLE: this is a lightweight,
+# documented scope decision appropriate for an FYP demo - a real
+# production system would use Redis or a database table so the limit
+# survives a server restart and works across multiple server
+# instances. Here, a simple dictionary is sufficient to demonstrate
+# the security concept and actually block real brute-force attempts
+# during a single running session.
+# =====================================================================
+
+from collections import defaultdict
+
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+# Maps email -> list of datetimes when a failed login happened.
+_failed_login_attempts: dict[str, list[datetime]] = defaultdict(list)
+
+
+def is_locked_out(email: str) -> bool:
+    """
+    Checks whether this email has had too many failed login attempts
+    recently. Old attempts (outside the lockout window) are cleaned
+    up automatically each time this is called.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_MINUTES)
+    recent_attempts = [t for t in _failed_login_attempts[email] if t > cutoff]
+    _failed_login_attempts[email] = recent_attempts
+    return len(recent_attempts) >= MAX_FAILED_ATTEMPTS
+
+
+def record_failed_attempt(email: str) -> None:
+    """Records one failed login attempt for this email, right now."""
+    _failed_login_attempts[email].append(datetime.now(timezone.utc))
+
+
+def clear_failed_attempts(email: str) -> None:
+    """Called after a SUCCESSFUL login - resets the counter to zero."""
+    _failed_login_attempts[email] = []
