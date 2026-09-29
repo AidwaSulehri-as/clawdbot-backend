@@ -24,25 +24,31 @@ from app.models import (
     SignupResponse,
     LoginRequest,
     TokenResponse,
+    UserResponse,
 )
 
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
 from app.suggestion_engine import analyze_patterns
 
-from app.database import get_db
+from app.database import get_db, Base, engine
+from app import db_models
 from app.db_models import User
-from app.auth_utils import hash_password, verify_password, create_access_token
+from app.auth_utils import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user_email,
+)
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Clawd Bot Backend",
     description="NLP chatbot, reminder parsing, and context-aware suggestions for Clawd Bot",
     version="0.1.0",
 )
-from app.database import Base, engine
-from app import db_models
 
-Base.metadata.create_all(bind=engine)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,12 +64,14 @@ def health_check():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(
+    request: ChatRequest,
+    current_user_email: str = Depends(get_current_user_email),
+):
     """
-    Takes a user message (typed, or transcribed from voice), figures
-    out the intent (create_reminder, find_object, find_note,
-    list_tasks, or general_chat), and returns a natural-language
-    reply plus an optional action for the app to execute locally.
+    UPDATED Sep 19: now requires a valid login token. The identity of
+    the caller comes from the token (current_user_email) instead of
+    the old hardcoded 'user_id': 'default' field.
     """
     result = handle_chat(request.message)
     return ChatResponse(**result)
@@ -73,22 +81,26 @@ def chat(request: ChatRequest):
 def parse_reminder(request: ParseReminderRequest):
     """
     Takes free text like "remind me to take medicine tomorrow at 6pm"
-    and extracts a structured task/date/time.
+    and extracts a structured task/date/time. Not user-specific, so
+    left unprotected - it's a pure text-processing utility endpoint,
+    called internally by /chat.
     """
     result = extract_reminder(request.text)
     return ParseReminderResponse(**result)
 
 
 @app.post("/suggestions", response_model=SuggestionsResponse)
-def suggestions(request: SuggestionsRequest):
+def suggestions(
+    request: SuggestionsRequest,
+    current_user_email: str = Depends(get_current_user_email),
+):
     """
+    UPDATED Sep 19: now requires a valid login token, same as /chat.
+
     Takes the user's reminder history (sent by the app, since that
     data lives in the phone's local database, not here) and looks for
     repeating patterns using the rule-based logic in
     app/suggestion_engine.py.
-
-    UPDATED Aug 24: now also accepts an optional nearby_object from
-    the app's on-device location check, factored into priority.
     """
     history_as_dicts = [
         {"task": item.task, "date": item.date, "time": item.time}
@@ -110,8 +122,7 @@ def suggestions(request: SuggestionsRequest):
 def signup(request: SignupRequest, db: Session = Depends(get_db)):
     """
     Creates a new user account. Rejects the request if the email is
-    already registered - this is the check the Flutter app's
-    'email already registered' error message comes from.
+    already registered.
     """
     existing_user = db.query(User).filter(User.email == request.email).first()
     if existing_user is not None:
@@ -135,10 +146,7 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
     Verifies email + password against the stored hash, and returns a
-    signed JWT token on success. The same generic error message is
-    used whether the email doesn't exist OR the password is wrong -
-    this is deliberate: telling an attacker "that email doesn't
-    exist" vs "wrong password" leaks which emails are registered.
+    signed JWT token on success.
     """
     user = db.query(User).filter(User.email == request.email).first()
 
@@ -150,3 +158,21 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
     return TokenResponse(access_token=access_token)
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def read_current_user(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """
+    NEW Sep 20: returns the logged-in user's own info, based on their
+    token.
+    """
+    user = db.query(User).filter(User.email == current_user_email).first()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    return UserResponse(id=user.id, email=user.email)

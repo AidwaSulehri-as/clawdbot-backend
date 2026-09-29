@@ -18,6 +18,8 @@
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from jose import jwt, JWTError
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # ---------------------------------------------------------------
 # IMPORTANT (security note for your report/manual): in a real
@@ -30,7 +32,6 @@ from jose import jwt, JWTError
 SECRET_KEY = "clawdbot-fyp-secret-key-change-if-this-were-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days - long-lived since
-
 # this is a memory-assistance app; forcing frequent re-logins would
 # work against the whole point of the app for its target users.
 
@@ -63,8 +64,7 @@ def create_access_token(data: dict) -> str:
 
 
 # ---------------------------------------------------------------
-# JWT verification - called on every protected request (this is
-# what Sep 19's auth middleware will use).
+# JWT verification - called on every protected request.
 # ---------------------------------------------------------------
 def decode_access_token(token: str) -> dict | None:
     try:
@@ -72,3 +72,46 @@ def decode_access_token(token: str) -> dict | None:
         return payload
     except JWTError:
         return None
+
+
+# =====================================================================
+# Sep 19 — Authentication middleware/dependency.
+#
+# HTTPBearer gives a simple "paste your token" box on the /docs
+# Authorize popup, instead of a full OAuth2 username/password form -
+# a better fit since our /auth/login endpoint takes JSON, not the
+# OAuth2 standard form format.
+#
+# Any endpoint that adds
+# `current_user_email: str = Depends(get_current_user_email)` to its
+# parameters is now PROTECTED - FastAPI won't even call the endpoint
+# function if the token is missing or invalid; it returns 401 first.
+# =====================================================================
+
+bearer_scheme = HTTPBearer()
+
+
+def get_current_user_email(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> str:
+    """
+    Extracts and validates the token from the Authorization header.
+    Returns the logged-in user's email if valid. Raises 401 if the
+    token is missing, malformed, expired, or otherwise invalid.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        raise credentials_exception
+
+    email = payload.get("sub")
+    if email is None:
+        raise credentials_exception
+
+    return email
