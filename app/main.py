@@ -266,3 +266,174 @@ def list_object_locations(
         )
         for l in locations
     ]
+
+
+# =====================================================================
+# REMINDER — UPDATE & DELETE
+# =====================================================================
+
+@app.put("/reminders/{reminder_id}", response_model=ReminderResponse)
+def update_reminder(
+    reminder_id: int,
+    request: ReminderCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    reminder = (
+        db.query(Reminder)
+        .filter(Reminder.id == reminder_id, Reminder.user_id == user.id)
+        .first()
+    )
+    if reminder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reminder not found.")
+
+    reminder.task = request.task
+    reminder.date = request.date
+    reminder.time = request.time
+    reminder.priority = request.priority
+    reminder.completed = request.completed
+    reminder.category = request.category
+    # last_modified updates automatically (onupdate=datetime.utcnow in db_models.py)
+
+    db.commit()
+    db.refresh(reminder)
+    return ReminderResponse(
+        id=reminder.id,
+        task=reminder.task,
+        date=reminder.date,
+        time=reminder.time,
+        priority=reminder.priority,
+        completed=reminder.completed,
+        category=reminder.category,
+        last_modified=reminder.last_modified.isoformat(),
+    )
+
+
+@app.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_reminder(
+    reminder_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    reminder = (
+        db.query(Reminder)
+        .filter(Reminder.id == reminder_id, Reminder.user_id == user.id)
+        .first()
+    )
+    if reminder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reminder not found.")
+    db.delete(reminder)
+    db.commit()
+    return None
+
+
+# =====================================================================
+# NOTE — UPDATE & DELETE
+# =====================================================================
+
+@app.put("/notes/{note_id}", response_model=NoteResponse)
+def update_note(
+    note_id: int,
+    request: NoteCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    note = (
+        db.query(Note)
+        .filter(Note.id == note_id, Note.user_id == user.id)
+        .first()
+    )
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
+
+    note.title = request.title
+    note.content = request.content
+    note.created_at = request.created_at
+
+    db.commit()
+    db.refresh(note)
+    return NoteResponse(
+        id=note.id,
+        title=note.title,
+        content=note.content,
+        created_at=note.created_at,
+        last_modified=note.last_modified.isoformat(),
+    )
+
+
+@app.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_note(
+    note_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    note = (
+        db.query(Note)
+        .filter(Note.id == note_id, Note.user_id == user.id)
+        .first()
+    )
+    if note is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
+    db.delete(note)
+    db.commit()
+    return None
+
+
+# =====================================================================
+# OBJECT LOCATION — UPDATE & DELETE
+# =====================================================================
+
+@app.put("/object_locations/{location_id}", response_model=ObjectLocationResponse)
+def update_object_location(
+    location_id: int,
+    request: ObjectLocationCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    location = (
+        db.query(ObjectLocation)
+        .filter(ObjectLocation.id == location_id, ObjectLocation.user_id == user.id)
+        .first()
+    )
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object location not found.")
+
+    location.object_name = request.object_name
+    location.location_name = request.location_name
+    location.latitude = request.latitude
+    location.longitude = request.longitude
+
+    db.commit()
+    db.refresh(location)
+    return ObjectLocationResponse(
+        id=location.id,
+        object_name=location.object_name,
+        location_name=location.location_name,
+        latitude=location.latitude,
+        longitude=location.longitude,
+        last_modified=location.last_modified.isoformat(),
+    )
+
+
+@app.delete("/object_locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_object_location(
+    location_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    location = (
+        db.query(ObjectLocation)
+        .filter(ObjectLocation.id == location_id, ObjectLocation.user_id == user.id)
+        .first()
+    )
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object location not found.")
+    db.delete(location)
+    db.commit()
+    return None
