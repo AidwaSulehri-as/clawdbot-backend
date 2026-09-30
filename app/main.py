@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from app.models import (
     ChatRequest, ChatResponse, ParseReminderRequest, ParseReminderResponse,
@@ -9,6 +10,7 @@ from app.models import (
     ReminderCreate, ReminderResponse,
     NoteCreate, NoteResponse,
     ObjectLocationCreate, ObjectLocationResponse,
+    SyncRequest, SyncResponse,
 )
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
@@ -439,26 +441,41 @@ def delete_object_location(
     return None
 
 
+# ---------------------------------------------------------------
+# NEW Sep 28: helper for conflict resolution. Parses the phone's
+# ISO-format last_modified string into a real datetime so it can be
+# compared against the server's own last_modified. If parsing fails
+# or the phone didn't send one, returns None - callers treat that as
+# "no timestamp info, apply the update anyway" (old behaviour).
+# ---------------------------------------------------------------
+def _parse_client_timestamp(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
-    # =====================================================================
+
+# =====================================================================
 # SYNC ENDPOINT
 # =====================================================================
-# Today's version: a simple "accept and merge" sync. The phone sends
-# its full local list of reminders/notes/object_locations. For each
-# item:
-#   - if it has an "id" and that id exists for this user -> UPDATE it
-#   - otherwise (no id, or id not found) -> INSERT it as a new row
-# After processing everything sent, the server sends back its full,
-# up-to-date list for each type, so the phone can overwrite its local
-# copy and both sides end up identical.
+# UPDATED Sep 28: CONFLICT RESOLUTION ("server wins on stale write").
 #
-# NOTE: this does NOT yet compare timestamps to detect conflicts -
-# that is deliberately added next (Sep 28), so today's version always
-# accepts whatever the phone sends as the latest truth.
+# The phone sends its full local list. For each item WITH an id that
+# already exists on the server:
+#   - if the phone's last_modified is NEWER than the server's copy,
+#     the phone's version is accepted and overwrites the server's.
+#   - if the server's copy is the SAME AGE OR NEWER, the phone's
+#     update is REJECTED (silently skipped) - the server's existing
+#     version is kept as-is, since it's already at least as new.
+# This protects against an old, stale edit (e.g. from a phone that
+# was offline for a while) accidentally overwriting a newer edit that
+# already reached the server from another device.
+#
+# Items with no id (brand new, never synced before) are always
+# inserted - there's nothing to conflict with yet.
 # =====================================================================
-
-from app.models import SyncRequest, SyncResponse
-
 
 @app.post("/sync", response_model=SyncResponse)
 def sync_data(
@@ -478,6 +495,11 @@ def sync_data(
                 .first()
             )
         if existing is not None:
+            incoming_time = _parse_client_timestamp(item.last_modified)
+            if incoming_time is not None and incoming_time <= existing.last_modified:
+                # Server's copy is already as new or newer - reject
+                # this stale update and keep the server's version.
+                continue
             existing.task = item.task
             existing.date = item.date
             existing.time = item.time
@@ -505,6 +527,9 @@ def sync_data(
                 .first()
             )
         if existing is not None:
+            incoming_time = _parse_client_timestamp(item.last_modified)
+            if incoming_time is not None and incoming_time <= existing.last_modified:
+                continue
             existing.title = item.title
             existing.content = item.content
             existing.created_at = item.created_at
@@ -526,6 +551,9 @@ def sync_data(
                 .first()
             )
         if existing is not None:
+            incoming_time = _parse_client_timestamp(item.last_modified)
+            if incoming_time is not None and incoming_time <= existing.last_modified:
+                continue
             existing.object_name = item.object_name
             existing.location_name = item.location_name
             existing.latitude = item.latitude

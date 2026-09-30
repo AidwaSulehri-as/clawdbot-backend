@@ -62,8 +62,6 @@ class SuggestionsResponse(BaseModel):
     suggestions: list[Suggestion]
 
 
-
-     
 # =====================================================================
 # Phase 2 (Sep 18) — Authentication schemas
 # =====================================================================
@@ -88,13 +86,12 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-      
-
 class UserResponse(BaseModel):
     id: int
     email: str
 
-    # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
 # REMINDER schemas
 # ---------------------------------------------------------------
 class ReminderCreate(BaseModel):
@@ -146,8 +143,15 @@ class ObjectLocationResponse(BaseModel):
     latitude: float | None
     longitude: float | None
     last_modified: str
-    # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
 # SYNC schemas
+#
+# UPDATED Sep 28: each sync item now also carries its OWN
+# last_modified (the timestamp from the PHONE's local copy). This is
+# what lets the server compare "how new is the phone's version?"
+# against its own last_modified, and decide whether to accept the
+# phone's update or reject it as stale (conflict resolution).
 # ---------------------------------------------------------------
 class SyncReminderItem(BaseModel):
     id: int | None = None
@@ -157,12 +161,14 @@ class SyncReminderItem(BaseModel):
     priority: str = "green"
     completed: int = 0
     category: str | None = None
+    last_modified: str | None = None
 
 class SyncNoteItem(BaseModel):
     id: int | None = None
     title: str
     content: str | None = None
     created_at: str
+    last_modified: str | None = None
 
 class SyncObjectLocationItem(BaseModel):
     id: int | None = None
@@ -170,6 +176,7 @@ class SyncObjectLocationItem(BaseModel):
     location_name: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    last_modified: str | None = None
 
 class SyncRequest(BaseModel):
     reminders: list[SyncReminderItem] = []
