@@ -466,12 +466,13 @@ def _parse_client_timestamp(value: str | None):
 # already exists on the server:
 #   - if the phone's last_modified is NEWER than the server's copy,
 #     the phone's version is accepted and overwrites the server's.
+#     CRITICALLY, the server also stores the PHONE's own timestamp
+#     (not the server's processing time) as the new last_modified -
+#     otherwise a later conflict check would compare against the
+#     wrong clock and wrongly accept an actually-stale update.
 #   - if the server's copy is the SAME AGE OR NEWER, the phone's
 #     update is REJECTED (silently skipped) - the server's existing
-#     version is kept as-is, since it's already at least as new.
-# This protects against an old, stale edit (e.g. from a phone that
-# was offline for a while) accidentally overwriting a newer edit that
-# already reached the server from another device.
+#     version is kept as-is.
 #
 # Items with no id (brand new, never synced before) are always
 # inserted - there's nothing to conflict with yet.
@@ -506,6 +507,11 @@ def sync_data(
             existing.priority = item.priority
             existing.completed = item.completed
             existing.category = item.category
+            if incoming_time is not None:
+                # Store the PHONE's own timestamp, not the server's
+                # processing time - so future conflict checks compare
+                # against the correct clock.
+                existing.last_modified = incoming_time
         else:
             db.add(Reminder(
                 user_id=user.id,
@@ -533,6 +539,8 @@ def sync_data(
             existing.title = item.title
             existing.content = item.content
             existing.created_at = item.created_at
+            if incoming_time is not None:
+                existing.last_modified = incoming_time
         else:
             db.add(Note(
                 user_id=user.id,
@@ -558,6 +566,8 @@ def sync_data(
             existing.location_name = item.location_name
             existing.latitude = item.latitude
             existing.longitude = item.longitude
+            if incoming_time is not None:
+                existing.last_modified = incoming_time
         else:
             db.add(ObjectLocation(
                 user_id=user.id,
