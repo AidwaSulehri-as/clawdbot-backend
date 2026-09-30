@@ -146,3 +146,37 @@ class ObjectLocationResponse(BaseModel):
     latitude: float | None
     longitude: float | None
     last_modified: str
+    # ---------------------------------------------------------------
+# SYNC schemas
+# ---------------------------------------------------------------
+class SyncReminderItem(BaseModel):
+    id: int | None = None
+    task: str
+    date: str
+    time: str
+    priority: str = "green"
+    completed: int = 0
+    category: str | None = None
+
+class SyncNoteItem(BaseModel):
+    id: int | None = None
+    title: str
+    content: str | None = None
+    created_at: str
+
+class SyncObjectLocationItem(BaseModel):
+    id: int | None = None
+    object_name: str
+    location_name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+class SyncRequest(BaseModel):
+    reminders: list[SyncReminderItem] = []
+    notes: list[SyncNoteItem] = []
+    object_locations: list[SyncObjectLocationItem] = []
+
+class SyncResponse(BaseModel):
+    reminders: list[ReminderResponse]
+    notes: list[NoteResponse]
+    object_locations: list[ObjectLocationResponse]

@@ -437,3 +437,137 @@ def delete_object_location(
     db.delete(location)
     db.commit()
     return None
+
+
+
+    # =====================================================================
+# SYNC ENDPOINT
+# =====================================================================
+# Today's version: a simple "accept and merge" sync. The phone sends
+# its full local list of reminders/notes/object_locations. For each
+# item:
+#   - if it has an "id" and that id exists for this user -> UPDATE it
+#   - otherwise (no id, or id not found) -> INSERT it as a new row
+# After processing everything sent, the server sends back its full,
+# up-to-date list for each type, so the phone can overwrite its local
+# copy and both sides end up identical.
+#
+# NOTE: this does NOT yet compare timestamps to detect conflicts -
+# that is deliberately added next (Sep 28), so today's version always
+# accepts whatever the phone sends as the latest truth.
+# =====================================================================
+
+from app.models import SyncRequest, SyncResponse
+
+
+@app.post("/sync", response_model=SyncResponse)
+def sync_data(
+    request: SyncRequest,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+
+    # ---- REMINDERS ----
+    for item in request.reminders:
+        existing = None
+        if item.id is not None:
+            existing = (
+                db.query(Reminder)
+                .filter(Reminder.id == item.id, Reminder.user_id == user.id)
+                .first()
+            )
+        if existing is not None:
+            existing.task = item.task
+            existing.date = item.date
+            existing.time = item.time
+            existing.priority = item.priority
+            existing.completed = item.completed
+            existing.category = item.category
+        else:
+            db.add(Reminder(
+                user_id=user.id,
+                task=item.task,
+                date=item.date,
+                time=item.time,
+                priority=item.priority,
+                completed=item.completed,
+                category=item.category,
+            ))
+
+    # ---- NOTES ----
+    for item in request.notes:
+        existing = None
+        if item.id is not None:
+            existing = (
+                db.query(Note)
+                .filter(Note.id == item.id, Note.user_id == user.id)
+                .first()
+            )
+        if existing is not None:
+            existing.title = item.title
+            existing.content = item.content
+            existing.created_at = item.created_at
+        else:
+            db.add(Note(
+                user_id=user.id,
+                title=item.title,
+                content=item.content,
+                created_at=item.created_at,
+            ))
+
+    # ---- OBJECT LOCATIONS ----
+    for item in request.object_locations:
+        existing = None
+        if item.id is not None:
+            existing = (
+                db.query(ObjectLocation)
+                .filter(ObjectLocation.id == item.id, ObjectLocation.user_id == user.id)
+                .first()
+            )
+        if existing is not None:
+            existing.object_name = item.object_name
+            existing.location_name = item.location_name
+            existing.latitude = item.latitude
+            existing.longitude = item.longitude
+        else:
+            db.add(ObjectLocation(
+                user_id=user.id,
+                object_name=item.object_name,
+                location_name=item.location_name,
+                latitude=item.latitude,
+                longitude=item.longitude,
+            ))
+
+    db.commit()
+
+    # ---- Build the full, up-to-date response ----
+    final_reminders = db.query(Reminder).filter(Reminder.user_id == user.id).order_by(Reminder.id.desc()).all()
+    final_notes = db.query(Note).filter(Note.user_id == user.id).order_by(Note.id.desc()).all()
+    final_locations = db.query(ObjectLocation).filter(ObjectLocation.user_id == user.id).order_by(ObjectLocation.id.desc()).all()
+
+    return SyncResponse(
+        reminders=[
+            ReminderResponse(
+                id=r.id, task=r.task, date=r.date, time=r.time,
+                priority=r.priority, completed=r.completed, category=r.category,
+                last_modified=r.last_modified.isoformat(),
+            )
+            for r in final_reminders
+        ],
+        notes=[
+            NoteResponse(
+                id=n.id, title=n.title, content=n.content,
+                created_at=n.created_at, last_modified=n.last_modified.isoformat(),
+            )
+            for n in final_notes
+        ],
+        object_locations=[
+            ObjectLocationResponse(
+                id=l.id, object_name=l.object_name, location_name=l.location_name,
+                latitude=l.latitude, longitude=l.longitude,
+                last_modified=l.last_modified.isoformat(),
+            )
+            for l in final_locations
+        ],
+    )
