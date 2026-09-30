@@ -93,3 +93,56 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: str
+
+    # ---------------------------------------------------------------
+# REMINDER schemas
+# ---------------------------------------------------------------
+class ReminderCreate(BaseModel):
+    task: str
+    date: str
+    time: str
+    priority: str = "green"
+    completed: int = 0
+    category: str | None = None
+
+class ReminderResponse(BaseModel):
+    id: int
+    task: str
+    date: str
+    time: str
+    priority: str
+    completed: int
+    category: str | None
+    last_modified: str
+
+# ---------------------------------------------------------------
+# NOTE schemas
+# ---------------------------------------------------------------
+class NoteCreate(BaseModel):
+    title: str
+    content: str | None = None
+    created_at: str
+
+class NoteResponse(BaseModel):
+    id: int
+    title: str
+    content: str | None
+    created_at: str
+    last_modified: str
+
+# ---------------------------------------------------------------
+# OBJECT LOCATION schemas
+# ---------------------------------------------------------------
+class ObjectLocationCreate(BaseModel):
+    object_name: str
+    location_name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+class ObjectLocationResponse(BaseModel):
+    id: int
+    object_name: str
+    location_name: str | None
+    latitude: float | None
+    longitude: float | None
+    last_modified: str

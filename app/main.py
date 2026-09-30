@@ -1,58 +1,29 @@
-"""
-=====================================================================
- main.py — the actual FastAPI SERVER file.
-
- HOW TO RUN THIS FILE:
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
-=====================================================================
-"""
-
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.models import (
-    ChatRequest,
-    ChatResponse,
-    ParseReminderRequest,
-    ParseReminderResponse,
-    SuggestionsRequest,
-    SuggestionsResponse,
-    Suggestion,
-    ReminderAction,
-    SignupRequest,
-    SignupResponse,
-    LoginRequest,
-    TokenResponse,
-    UserResponse,
+    ChatRequest, ChatResponse, ParseReminderRequest, ParseReminderResponse,
+    SuggestionsRequest, SuggestionsResponse, Suggestion, ReminderAction,
+    SignupRequest, SignupResponse, LoginRequest, TokenResponse, UserResponse,
+    ReminderCreate, ReminderResponse,
+    NoteCreate, NoteResponse,
+    ObjectLocationCreate, ObjectLocationResponse,
 )
-
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
 from app.suggestion_engine import analyze_patterns
-
 from app.database import get_db, Base, engine
 from app import db_models
-from app.db_models import User
+from app.db_models import User, Reminder, Note, ObjectLocation
 from app.auth_utils import (
-    hash_password,
-    verify_password,
-    create_access_token,
-    get_current_user_email,
-    is_locked_out,
-    record_failed_attempt,
-    clear_failed_attempts,
-    LOCKOUT_MINUTES,
+    hash_password, verify_password, create_access_token, get_current_user_email,
+    is_locked_out, record_failed_attempt, clear_failed_attempts, LOCKOUT_MINUTES,
 )
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(
-    title="Clawd Bot Backend",
-    description="NLP chatbot, reminder parsing, and context-aware suggestions for Clawd Bot",
-    version="0.1.0",
-)
-
+app = FastAPI(title="Clawd Bot Backend", description="Backend for Clawd Bot FYP", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,115 +34,55 @@ app.add_middleware(
 
 @app.get("/")
 def health_check():
-    """Quick endpoint to confirm the server is alive."""
     return {"status": "ok", "service": "clawd-bot-backend"}
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(
-    request: ChatRequest,
-    current_user_email: str = Depends(get_current_user_email),
-):
-    """
-    UPDATED Sep 19: now requires a valid login token. The identity of
-    the caller comes from the token (current_user_email) instead of
-    the old hardcoded 'user_id': 'default' field.
-    """
+def chat(request: ChatRequest, current_user_email: str = Depends(get_current_user_email)):
     result = handle_chat(request.message)
     return ChatResponse(**result)
 
 
 @app.post("/parse_reminder", response_model=ParseReminderResponse)
 def parse_reminder(request: ParseReminderRequest):
-    """
-    Takes free text like "remind me to take medicine tomorrow at 6pm"
-    and extracts a structured task/date/time. Not user-specific, so
-    left unprotected - it's a pure text-processing utility endpoint,
-    called internally by /chat.
-    """
     result = extract_reminder(request.text)
     return ParseReminderResponse(**result)
 
 
 @app.post("/suggestions", response_model=SuggestionsResponse)
-def suggestions(
-    request: SuggestionsRequest,
-    current_user_email: str = Depends(get_current_user_email),
-):
-    """
-    UPDATED Sep 19: now requires a valid login token, same as /chat.
-
-    Takes the user's reminder history (sent by the app, since that
-    data lives in the phone's local database, not here) and looks for
-    repeating patterns using the rule-based logic in
-    app/suggestion_engine.py.
-    """
-    history_as_dicts = [
-        {"task": item.task, "date": item.date, "time": item.time}
-        for item in request.reminder_history
-    ]
-
+def suggestions(request: SuggestionsRequest, current_user_email: str = Depends(get_current_user_email)):
+    history_as_dicts = [{"task": i.task, "date": i.date, "time": i.time} for i in request.reminder_history]
     results = analyze_patterns(history_as_dicts, nearby_object=request.nearby_object)
-
-    return SuggestionsResponse(
-        suggestions=[Suggestion(**s) for s in results]
-    )
+    return SuggestionsResponse(suggestions=[Suggestion(**s) for s in results])
 
 
 # =====================================================================
-# Phase 2 (Sep 18) — Authentication endpoints
+# AUTH ENDPOINTS
 # =====================================================================
 
 @app.post("/auth/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(request: SignupRequest, db: Session = Depends(get_db)):
-    """
-    Creates a new user account. Rejects the request if the email is
-    already registered.
-    """
     existing_user = db.query(User).filter(User.email == request.email).first()
     if existing_user is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered.",
-        )
-
-    new_user = User(
-        email=request.email,
-        hashed_password=hash_password(request.password),
-    )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered.")
+    new_user = User(email=request.email, hashed_password=hash_password(request.password))
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-
     return SignupResponse(email=new_user.email)
 
 
 @app.post("/auth/login", response_model=TokenResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
-    """
-    Verifies email + password against the stored hash, and returns a
-    signed JWT token on success.
-
-    UPDATED Sep 21: added rate-limiting - after 5 failed attempts on
-    one email within 15 minutes, further attempts are blocked with a
-    429 (Too Many Requests) response, even if the correct password is
-    provided. This stops brute-force password guessing.
-    """
     if is_locked_out(request.email):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Too many failed login attempts. Please try again in {LOCKOUT_MINUTES} minutes.",
         )
-
     user = db.query(User).filter(User.email == request.email).first()
-
     if user is None or not verify_password(request.password, user.hashed_password):
         record_failed_attempt(request.email)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password.",
-        )
-
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password.")
     clear_failed_attempts(request.email)
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
     return TokenResponse(access_token=access_token)
@@ -182,13 +93,176 @@ def read_current_user(
     current_user_email: str = Depends(get_current_user_email),
     db: Session = Depends(get_db),
 ):
-    """
-    Returns the logged-in user's own info, based on their token.
-    """
     user = db.query(User).filter(User.email == current_user_email).first()
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return UserResponse(id=user.id, email=user.email)
+
+
+# ---------------------------------------------------------------
+# Small helper - every endpoint below needs the numeric user id,
+# not just the email, to filter rows by user_id. This looks up
+# the logged-in user's row and returns it (or 404s if somehow
+# missing, which should never normally happen).
+# ---------------------------------------------------------------
+def get_current_user(db: Session, email: str) -> User:
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+
+# =====================================================================
+# REMINDER ENDPOINTS
+# =====================================================================
+
+@app.post("/reminders", response_model=ReminderResponse, status_code=status.HTTP_201_CREATED)
+def create_reminder(
+    request: ReminderCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    new_reminder = Reminder(
+        user_id=user.id,
+        task=request.task,
+        date=request.date,
+        time=request.time,
+        priority=request.priority,
+        completed=request.completed,
+        category=request.category,
+    )
+    db.add(new_reminder)
+    db.commit()
+    db.refresh(new_reminder)
+    return ReminderResponse(
+        id=new_reminder.id,
+        task=new_reminder.task,
+        date=new_reminder.date,
+        time=new_reminder.time,
+        priority=new_reminder.priority,
+        completed=new_reminder.completed,
+        category=new_reminder.category,
+        last_modified=new_reminder.last_modified.isoformat(),
+    )
+
+
+@app.get("/reminders", response_model=list[ReminderResponse])
+def list_reminders(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    reminders = db.query(Reminder).filter(Reminder.user_id == user.id).order_by(Reminder.id.desc()).all()
+    return [
+        ReminderResponse(
+            id=r.id,
+            task=r.task,
+            date=r.date,
+            time=r.time,
+            priority=r.priority,
+            completed=r.completed,
+            category=r.category,
+            last_modified=r.last_modified.isoformat(),
+        )
+        for r in reminders
+    ]
+
+
+# =====================================================================
+# NOTE ENDPOINTS
+# =====================================================================
+
+@app.post("/notes", response_model=NoteResponse, status_code=status.HTTP_201_CREATED)
+def create_note(
+    request: NoteCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    new_note = Note(
+        user_id=user.id,
+        title=request.title,
+        content=request.content,
+        created_at=request.created_at,
+    )
+    db.add(new_note)
+    db.commit()
+    db.refresh(new_note)
+    return NoteResponse(
+        id=new_note.id,
+        title=new_note.title,
+        content=new_note.content,
+        created_at=new_note.created_at,
+        last_modified=new_note.last_modified.isoformat(),
+    )
+
+
+@app.get("/notes", response_model=list[NoteResponse])
+def list_notes(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    notes = db.query(Note).filter(Note.user_id == user.id).order_by(Note.id.desc()).all()
+    return [
+        NoteResponse(
+            id=n.id,
+            title=n.title,
+            content=n.content,
+            created_at=n.created_at,
+            last_modified=n.last_modified.isoformat(),
+        )
+        for n in notes
+    ]
+
+
+# =====================================================================
+# OBJECT LOCATION ENDPOINTS
+# =====================================================================
+
+@app.post("/object_locations", response_model=ObjectLocationResponse, status_code=status.HTTP_201_CREATED)
+def create_object_location(
+    request: ObjectLocationCreate,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    new_location = ObjectLocation(
+        user_id=user.id,
+        object_name=request.object_name,
+        location_name=request.location_name,
+        latitude=request.latitude,
+        longitude=request.longitude,
+    )
+    db.add(new_location)
+    db.commit()
+    db.refresh(new_location)
+    return ObjectLocationResponse(
+        id=new_location.id,
+        object_name=new_location.object_name,
+        location_name=new_location.location_name,
+        latitude=new_location.latitude,
+        longitude=new_location.longitude,
+        last_modified=new_location.last_modified.isoformat(),
+    )
+
+
+@app.get("/object_locations", response_model=list[ObjectLocationResponse])
+def list_object_locations(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(db, current_user_email)
+    locations = db.query(ObjectLocation).filter(ObjectLocation.user_id == user.id).order_by(ObjectLocation.id.desc()).all()
+    return [
+        ObjectLocationResponse(
+            id=l.id,
+            object_name=l.object_name,
+            location_name=l.location_name,
+            latitude=l.latitude,
+            longitude=l.longitude,
+            last_modified=l.last_modified.isoformat(),
+        )
+        for l in locations
+    ]
