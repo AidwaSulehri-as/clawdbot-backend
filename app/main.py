@@ -1,7 +1,11 @@
+import secrets
+import string
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from datetime import datetime
+from sqlalchemy import or_
+from datetime import datetime, timedelta
 
 from app.models import (
     ChatRequest, ChatResponse, ParseReminderRequest, ParseReminderResponse,
@@ -11,13 +15,14 @@ from app.models import (
     NoteCreate, NoteResponse,
     ObjectLocationCreate, ObjectLocationResponse,
     SyncRequest, SyncResponse,
+    InviteCodeResponse, RedeemCodeRequest, CaregiverLinkResponse,
 )
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
 from app.suggestion_engine import analyze_patterns
 from app.database import get_db, Base, engine
 from app import db_models
-from app.db_models import User, Reminder, Note, ObjectLocation
+from app.db_models import User, Reminder, Note, ObjectLocation, InviteCode, CaregiverLink
 from app.auth_utils import (
     hash_password, verify_password, create_access_token, get_current_user_email,
     is_locked_out, record_failed_attempt, clear_failed_attempts, LOCKOUT_MINUTES,
@@ -609,3 +614,256 @@ def sync_data(
             for l in final_locations
         ],
     )
+
+
+# =====================================================================
+# MULTI-CAREGIVER / FAMILY VIEW ENDPOINTS
+#
+# Flow:
+#   1. The patient calls POST /caregiver/invite - gets back a short
+#      code (e.g. "7K3QF2") that expires in 15 minutes. They read it
+#      out or text it to a family member.
+#   2. The caregiver calls POST /caregiver/redeem with that code -
+#      this creates the permanent CaregiverLink and burns the code.
+#   3. From then on, the caregiver can call the read-only
+#      /caregiver/patients/{patient_id}/... endpoints to view that
+#      patient's reminders/notes/object locations. They can NOT
+#      create, edit, or delete anything - view-only by design.
+#   4. Either side can remove the link with DELETE /caregiver/unlink.
+# =====================================================================
+
+CODE_LENGTH = 6
+CODE_EXPIRE_MINUTES = 15
+CODE_ALPHABET = string.ascii_uppercase + string.digits  # no lowercase - easier to read aloud
+
+
+def _generate_invite_code() -> str:
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+
+
+@app.post("/caregiver/invite", response_model=InviteCodeResponse, status_code=status.HTTP_201_CREATED)
+def create_invite_code(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """Called by the PATIENT to generate a new code to share with a caregiver."""
+    patient = get_current_user(db, current_user_email)
+
+    # Vanishingly unlikely to collide, but guard against it anyway.
+    code = _generate_invite_code()
+    while db.query(InviteCode).filter(InviteCode.code == code, InviteCode.used == 0).first() is not None:
+        code = _generate_invite_code()
+
+    expires_at = datetime.utcnow() + timedelta(minutes=CODE_EXPIRE_MINUTES)
+    new_code = InviteCode(code=code, patient_id=patient.id, expires_at=expires_at)
+    db.add(new_code)
+    db.commit()
+    db.refresh(new_code)
+    return InviteCodeResponse(code=new_code.code, expires_at=new_code.expires_at.isoformat())
+
+
+@app.post("/caregiver/redeem", response_model=CaregiverLinkResponse, status_code=status.HTTP_201_CREATED)
+def redeem_invite_code(
+    request: RedeemCodeRequest,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """Called by the CAREGIVER, entering a code the patient shared with them."""
+    caregiver = get_current_user(db, current_user_email)
+
+    invite = (
+        db.query(InviteCode)
+        .filter(InviteCode.code == request.code.strip().upper(), InviteCode.used == 0)
+        .first()
+    )
+    if invite is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid or already-used code.")
+    if invite.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This code has expired.")
+    if invite.patient_id == caregiver.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You can't link to your own account.")
+
+    existing_link = (
+        db.query(CaregiverLink)
+        .filter(CaregiverLink.patient_id == invite.patient_id, CaregiverLink.caregiver_id == caregiver.id)
+        .first()
+    )
+    if existing_link is not None:
+        invite.used = 1
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You're already linked to this patient.")
+
+    patient = db.query(User).filter(User.id == invite.patient_id).first()
+    if patient is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient account no longer exists.")
+
+    invite.used = 1
+    new_link = CaregiverLink(patient_id=patient.id, caregiver_id=caregiver.id)
+    db.add(new_link)
+    db.commit()
+    db.refresh(new_link)
+    return CaregiverLinkResponse(
+        patient_id=patient.id,
+        patient_email=patient.email,
+        caregiver_id=caregiver.id,
+        caregiver_email=caregiver.email,
+        created_at=new_link.created_at.isoformat(),
+    )
+
+
+@app.get("/caregiver/my_patients", response_model=list[CaregiverLinkResponse])
+def list_my_patients(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """For a CAREGIVER: lists every patient they're currently linked to."""
+    caregiver = get_current_user(db, current_user_email)
+    links = db.query(CaregiverLink).filter(CaregiverLink.caregiver_id == caregiver.id).all()
+    results = []
+    for link in links:
+        patient = db.query(User).filter(User.id == link.patient_id).first()
+        if patient is None:
+            continue
+        results.append(CaregiverLinkResponse(
+            patient_id=patient.id,
+            patient_email=patient.email,
+            caregiver_id=caregiver.id,
+            caregiver_email=caregiver.email,
+            created_at=link.created_at.isoformat(),
+        ))
+    return results
+
+
+@app.get("/caregiver/my_caregivers", response_model=list[CaregiverLinkResponse])
+def list_my_caregivers(
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """For a PATIENT: lists every caregiver currently linked to their account."""
+    patient = get_current_user(db, current_user_email)
+    links = db.query(CaregiverLink).filter(CaregiverLink.patient_id == patient.id).all()
+    results = []
+    for link in links:
+        caregiver = db.query(User).filter(User.id == link.caregiver_id).first()
+        if caregiver is None:
+            continue
+        results.append(CaregiverLinkResponse(
+            patient_id=patient.id,
+            patient_email=patient.email,
+            caregiver_id=caregiver.id,
+            caregiver_email=caregiver.email,
+            created_at=link.created_at.isoformat(),
+        ))
+    return results
+
+
+@app.delete("/caregiver/unlink/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_caregiver(
+    patient_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    """
+    Removes a caregiver<->patient link. The logged-in caller can be
+    EITHER side of the link (the patient removing a caregiver, or the
+    caregiver removing themselves from a patient) - we check both.
+    """
+    caller = get_current_user(db, current_user_email)
+    link = (
+        db.query(CaregiverLink)
+        .filter(
+            CaregiverLink.patient_id == patient_id,
+            or_(CaregiverLink.caregiver_id == caller.id, CaregiverLink.patient_id == caller.id),
+        )
+        .first()
+    )
+    if link is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found.")
+    db.delete(link)
+    db.commit()
+    return None
+
+
+# ---------------------------------------------------------------
+# Small helper - every read-only caregiver view endpoint below must
+# confirm the logged-in caller is actually a linked caregiver for the
+# requested patient_id before returning any of that patient's data.
+# 403s otherwise, so a caregiver can never see a patient who hasn't
+# shared a code with them.
+# ---------------------------------------------------------------
+def _get_linked_patient(db: Session, caregiver: User, patient_id: int) -> User:
+    link = (
+        db.query(CaregiverLink)
+        .filter(CaregiverLink.caregiver_id == caregiver.id, CaregiverLink.patient_id == patient_id)
+        .first()
+    )
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not a linked caregiver for this patient.",
+        )
+    patient = db.query(User).filter(User.id == patient_id).first()
+    if patient is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.")
+    return patient
+
+
+@app.get("/caregiver/patients/{patient_id}/reminders", response_model=list[ReminderResponse])
+def view_patient_reminders(
+    patient_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    caregiver = get_current_user(db, current_user_email)
+    patient = _get_linked_patient(db, caregiver, patient_id)
+    reminders = db.query(Reminder).filter(Reminder.user_id == patient.id).order_by(Reminder.id.desc()).all()
+    return [
+        ReminderResponse(
+            id=r.id, task=r.task, date=r.date, time=r.time,
+            priority=r.priority, completed=r.completed, category=r.category,
+            last_modified=r.last_modified.isoformat(),
+        )
+        for r in reminders
+    ]
+
+
+@app.get("/caregiver/patients/{patient_id}/notes", response_model=list[NoteResponse])
+def view_patient_notes(
+    patient_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    caregiver = get_current_user(db, current_user_email)
+    patient = _get_linked_patient(db, caregiver, patient_id)
+    notes = db.query(Note).filter(Note.user_id == patient.id).order_by(Note.id.desc()).all()
+    return [
+        NoteResponse(
+            id=n.id, title=n.title, content=n.content,
+            created_at=n.created_at, last_modified=n.last_modified.isoformat(),
+        )
+        for n in notes
+    ]
+
+
+@app.get("/caregiver/patients/{patient_id}/object_locations", response_model=list[ObjectLocationResponse])
+def view_patient_object_locations(
+    patient_id: int,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    caregiver = get_current_user(db, current_user_email)
+    patient = _get_linked_patient(db, caregiver, patient_id)
+    locations = (
+        db.query(ObjectLocation)
+        .filter(ObjectLocation.user_id == patient.id)
+        .order_by(ObjectLocation.id.desc())
+        .all()
+    )
+    return [
+        ObjectLocationResponse(
+            id=l.id, object_name=l.object_name, location_name=l.location_name,
+            latitude=l.latitude, longitude=l.longitude,
+            last_modified=l.last_modified.isoformat(),
+        )
+        for l in locations
+    ]

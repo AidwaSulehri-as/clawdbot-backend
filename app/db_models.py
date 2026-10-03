@@ -76,3 +76,37 @@ class ContextLog(Base):
     last_modified = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("User", back_populates="context_logs")
+
+
+# =====================================================================
+# Oct — MULTI-CAREGIVER / FAMILY VIEW
+#
+# InviteCode: a short-lived code a patient generates and shares (e.g.
+# verbally or by text) with a family member/caregiver. The caregiver
+# submits this code in their own app to link their account to the
+# patient's. used=1 once redeemed so it can't be reused.
+#
+# CaregiverLink: once a code is redeemed, this is the permanent record
+# that "this caregiver can view this patient's data." A caregiver can
+# be linked to multiple patients, and a patient can have multiple
+# caregivers.
+# =====================================================================
+
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True, nullable=False)
+    patient_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Integer, nullable=False, default=0)
+
+
+class CaregiverLink(Base):
+    __tablename__ = "caregiver_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    caregiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

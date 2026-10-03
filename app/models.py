@@ -187,3 +187,24 @@ class SyncResponse(BaseModel):
     reminders: list[ReminderResponse]
     notes: list[NoteResponse]
     object_locations: list[ObjectLocationResponse]
+
+
+# =====================================================================
+# Oct — Multi-caregiver / family view schemas
+# =====================================================================
+
+class InviteCodeResponse(BaseModel):
+    code: str
+    expires_at: str
+
+
+class RedeemCodeRequest(BaseModel):
+    code: str
+
+
+class CaregiverLinkResponse(BaseModel):
+    patient_id: int
+    patient_email: str
+    caregiver_id: int
+    caregiver_email: str
+    created_at: str
