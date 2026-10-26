@@ -26,6 +26,10 @@ def analyze_patterns(
     DETECTION happens entirely on the phone via geolocator - the
     backend just factors the match into suggestion priority.
 
+    UPDATED Oct 27: place-only reminders have no time (empty string),
+    so they are skipped when working out the usual hour instead of
+    crashing.
+
     NOTE: matching is purely text-based (does the object name share a
     word with the task?). "medicine" matches task "buy medicine", but
     "pharmacy" would NOT match "buy medicine" since they share no
@@ -44,7 +48,20 @@ def analyze_patterns(
         if len(reminders_for_task) < 3:
             continue
 
-        hours = [int(r["time"].split(":")[0]) for r in reminders_for_task]
+        # Only reminders that actually have a time count towards the
+        # "usual hour" pattern.
+        hours = []
+        for r in reminders_for_task:
+            time_text = (r.get("time") or "").strip()
+            if ":" not in time_text:
+                continue
+            try:
+                hours.append(int(time_text.split(":")[0]))
+            except ValueError:
+                continue
+
+        if len(hours) < 3:
+            continue
 
         hour_counts = defaultdict(int)
         for hour in hours:
@@ -53,7 +70,7 @@ def analyze_patterns(
         most_common_hour = max(hour_counts, key=hour_counts.get)
         most_common_count = hour_counts[most_common_hour]
 
-        consistency = most_common_count / len(reminders_for_task)
+        consistency = most_common_count / len(hours)
 
         if consistency >= 0.6 and most_common_count >= 3:
             if most_common_count >= 5:
@@ -123,6 +140,8 @@ if __name__ == "__main__":
         {"task": "take medicine", "date": "2026-08-14", "time": "18:00"},
         {"task": "walk the dog", "date": "2026-08-12", "time": "07:00"},
         {"task": "buy groceries", "date": "2026-08-05", "time": "10:00"},
+        # A place-only reminder has no time - must not crash.
+        {"task": "buy groceries", "date": "", "time": ""},
     ]
 
     results = analyze_patterns(fake_past_reminders)
