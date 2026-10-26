@@ -4,7 +4,7 @@ import string
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, inspect, text
 from datetime import datetime, timedelta
 
 from app.models import (
@@ -16,6 +16,7 @@ from app.models import (
     ObjectLocationCreate, ObjectLocationResponse,
     SyncRequest, SyncResponse,
     InviteCodeResponse, RedeemCodeRequest, CaregiverLinkResponse,
+    ChangePasswordRequest,
 )
 from app.nlp_utils import extract_reminder
 from app.chat_engine import handle_chat
@@ -29,6 +30,67 @@ from app.auth_utils import (
 )
 
 Base.metadata.create_all(bind=engine)
+
+
+# ---------------------------------------------------------------
+# NEW Oct 27: place-based reminders.
+#
+# create_all() only creates MISSING TABLES - it never adds columns to
+# a table that already exists. Your clawdbot database file already has
+# a "reminders" table, so this small step adds the 5 new place columns
+# if they are not there yet. It is safe to run on every start-up: it
+# does nothing when the columns already exist, and it never deletes
+# any data.
+# ---------------------------------------------------------------
+PLACE_COLUMNS = {
+    "place_name": "VARCHAR",
+    "place_lat": "FLOAT",
+    "place_lng": "FLOAT",
+    "place_radius": "INTEGER",
+    "place_trigger": "VARCHAR",
+}
+
+
+def _add_missing_reminder_columns():
+    existing = {c["name"] for c in inspect(engine).get_columns("reminders")}
+    with engine.begin() as conn:
+        for name, col_type in PLACE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE reminders ADD COLUMN {name} {col_type}"))
+
+
+_add_missing_reminder_columns()
+
+
+# Small helpers so every endpoint handles the place fields the same way.
+def _place_fields(item) -> dict:
+    """Pulls the 5 place fields out of a request/sync item."""
+    return {
+        "place_name": item.place_name,
+        "place_lat": item.place_lat,
+        "place_lng": item.place_lng,
+        "place_radius": item.place_radius,
+        "place_trigger": item.place_trigger,
+    }
+
+
+def _reminder_response(r: Reminder) -> ReminderResponse:
+    return ReminderResponse(
+        id=r.id,
+        task=r.task,
+        date=r.date,
+        time=r.time,
+        priority=r.priority,
+        completed=r.completed,
+        category=r.category,
+        place_name=r.place_name,
+        place_lat=r.place_lat,
+        place_lng=r.place_lng,
+        place_radius=r.place_radius,
+        place_trigger=r.place_trigger,
+        last_modified=r.last_modified.isoformat(),
+    )
+
 
 app = FastAPI(title="Clawd Bot Backend", description="Backend for Clawd Bot FYP", version="1.0.0")
 app.add_middleware(
@@ -106,6 +168,25 @@ def read_current_user(
     return UserResponse(id=user.id, email=user.email)
 
 
+# NEW Oct 26: lets a logged-in user change their own password.
+@app.post("/auth/change-password")
+def change_password(
+    request: ChangePasswordRequest,
+    current_user_email: str = Depends(get_current_user_email),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.email == current_user_email).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if not verify_password(request.current_password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect.")
+    if len(request.new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters.")
+    user.hashed_password = hash_password(request.new_password)
+    db.commit()
+    return {"message": "Password changed successfully."}
+
+
 # ---------------------------------------------------------------
 # Small helper - every endpoint below needs the numeric user id,
 # not just the email, to filter rows by user_id. This looks up
@@ -138,20 +219,12 @@ def create_reminder(
         priority=request.priority,
         completed=request.completed,
         category=request.category,
+        **_place_fields(request),
     )
     db.add(new_reminder)
     db.commit()
     db.refresh(new_reminder)
-    return ReminderResponse(
-        id=new_reminder.id,
-        task=new_reminder.task,
-        date=new_reminder.date,
-        time=new_reminder.time,
-        priority=new_reminder.priority,
-        completed=new_reminder.completed,
-        category=new_reminder.category,
-        last_modified=new_reminder.last_modified.isoformat(),
-    )
+    return _reminder_response(new_reminder)
 
 
 @app.get("/reminders", response_model=list[ReminderResponse])
@@ -161,19 +234,7 @@ def list_reminders(
 ):
     user = get_current_user(db, current_user_email)
     reminders = db.query(Reminder).filter(Reminder.user_id == user.id).order_by(Reminder.id.desc()).all()
-    return [
-        ReminderResponse(
-            id=r.id,
-            task=r.task,
-            date=r.date,
-            time=r.time,
-            priority=r.priority,
-            completed=r.completed,
-            category=r.category,
-            last_modified=r.last_modified.isoformat(),
-        )
-        for r in reminders
-    ]
+    return [_reminder_response(r) for r in reminders]
 
 
 # =====================================================================
@@ -301,20 +362,13 @@ def update_reminder(
     reminder.priority = request.priority
     reminder.completed = request.completed
     reminder.category = request.category
+    for field, value in _place_fields(request).items():
+        setattr(reminder, field, value)
     # last_modified updates automatically (onupdate=datetime.utcnow in db_models.py)
 
     db.commit()
     db.refresh(reminder)
-    return ReminderResponse(
-        id=reminder.id,
-        task=reminder.task,
-        date=reminder.date,
-        time=reminder.time,
-        priority=reminder.priority,
-        completed=reminder.completed,
-        category=reminder.category,
-        last_modified=reminder.last_modified.isoformat(),
-    )
+    return _reminder_response(reminder)
 
 
 @app.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -481,6 +535,9 @@ def _parse_client_timestamp(value: str | None):
 #
 # Items with no id (brand new, never synced before) are always
 # inserted - there's nothing to conflict with yet.
+#
+# UPDATED Oct 27: reminders also carry their optional place fields
+# (place_name, place_lat, place_lng, place_radius, place_trigger).
 # =====================================================================
 
 @app.post("/sync", response_model=SyncResponse)
@@ -512,6 +569,8 @@ def sync_data(
             existing.priority = item.priority
             existing.completed = item.completed
             existing.category = item.category
+            for field, value in _place_fields(item).items():
+                setattr(existing, field, value)
             if incoming_time is not None:
                 # Store the PHONE's own timestamp, not the server's
                 # processing time - so future conflict checks compare
@@ -526,6 +585,7 @@ def sync_data(
                 priority=item.priority,
                 completed=item.completed,
                 category=item.category,
+                **_place_fields(item),
             ))
 
     # ---- NOTES ----
@@ -590,14 +650,7 @@ def sync_data(
     final_locations = db.query(ObjectLocation).filter(ObjectLocation.user_id == user.id).order_by(ObjectLocation.id.desc()).all()
 
     return SyncResponse(
-        reminders=[
-            ReminderResponse(
-                id=r.id, task=r.task, date=r.date, time=r.time,
-                priority=r.priority, completed=r.completed, category=r.category,
-                last_modified=r.last_modified.isoformat(),
-            )
-            for r in final_reminders
-        ],
+        reminders=[_reminder_response(r) for r in final_reminders],
         notes=[
             NoteResponse(
                 id=n.id, title=n.title, content=n.content,
@@ -817,14 +870,7 @@ def view_patient_reminders(
     caregiver = get_current_user(db, current_user_email)
     patient = _get_linked_patient(db, caregiver, patient_id)
     reminders = db.query(Reminder).filter(Reminder.user_id == patient.id).order_by(Reminder.id.desc()).all()
-    return [
-        ReminderResponse(
-            id=r.id, task=r.task, date=r.date, time=r.time,
-            priority=r.priority, completed=r.completed, category=r.category,
-            last_modified=r.last_modified.isoformat(),
-        )
-        for r in reminders
-    ]
+    return [_reminder_response(r) for r in reminders]
 
 
 @app.get("/caregiver/patients/{patient_id}/notes", response_model=list[NoteResponse])

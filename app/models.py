@@ -91,6 +91,12 @@ class UserResponse(BaseModel):
     email: str
 
 
+# NEW Oct 26: change-password request (used by POST /auth/change-password)
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 # ---------------------------------------------------------------
 # REMINDER schemas
 # ---------------------------------------------------------------
@@ -101,6 +107,12 @@ class ReminderCreate(BaseModel):
     priority: str = "green"
     completed: int = 0
     category: str | None = None
+    # NEW Oct 27 - optional place for place-based reminders.
+    place_name: str | None = None
+    place_lat: float | None = None
+    place_lng: float | None = None
+    place_radius: int | None = None
+    place_trigger: str | None = None
 
 class ReminderResponse(BaseModel):
     id: int
@@ -110,6 +122,12 @@ class ReminderResponse(BaseModel):
     priority: str
     completed: int
     category: str | None
+    # NEW Oct 27 - optional place for place-based reminders.
+    place_name: str | None = None
+    place_lat: float | None = None
+    place_lng: float | None = None
+    place_radius: int | None = None
+    place_trigger: str | None = None
     last_modified: str
 
 # ---------------------------------------------------------------
@@ -161,6 +179,12 @@ class SyncReminderItem(BaseModel):
     priority: str = "green"
     completed: int = 0
     category: str | None = None
+    # NEW Oct 27 - optional place for place-based reminders.
+    place_name: str | None = None
+    place_lat: float | None = None
+    place_lng: float | None = None
+    place_radius: int | None = None
+    place_trigger: str | None = None
     last_modified: str | None = None
 
 class SyncNoteItem(BaseModel):

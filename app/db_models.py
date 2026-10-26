@@ -1,6 +1,10 @@
 """
 =====================================================================
  db_models.py — the actual DATABASE TABLE definitions (SQLAlchemy).
+
+ UPDATED Oct 27: reminders got 5 optional place columns
+ (place_name, place_lat, place_lng, place_radius, place_trigger) for
+ place-based reminders.
 =====================================================================
 """
 from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
@@ -34,6 +38,13 @@ class Reminder(Base):
     priority = Column(String, nullable=False, default="green")
     completed = Column(Integer, nullable=False, default=0)
     category = Column(String, nullable=True)
+    # NEW Oct 27 - place-based reminders. All optional: a reminder with
+    # no place (place_lat/place_lng empty) is an ordinary time reminder.
+    place_name = Column(String, nullable=True)       # e.g. "Home", "Pharmacy"
+    place_lat = Column(Float, nullable=True)
+    place_lng = Column(Float, nullable=True)
+    place_radius = Column(Integer, nullable=True)    # metres, e.g. 100
+    place_trigger = Column(String, nullable=True)    # "arrive" or "leave"
     last_modified = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("User", back_populates="reminders")
@@ -79,14 +90,14 @@ class ContextLog(Base):
 
 
 # =====================================================================
-# Oct — MULTI-CAREGIVER / FAMILY VIEW
+# Oct 4 — MULTI-CAREGIVER / FAMILY VIEW
 #
 # InviteCode: a short-lived code a patient generates and shares (e.g.
 # verbally or by text) with a family member/caregiver. The caregiver
-# submits this code in their own app to link their account to the
-# patient's. used=1 once redeemed so it can't be reused.
+# enters this code in their own app to link their account to the
+# patient's.
 #
-# CaregiverLink: once a code is redeemed, this is the permanent record
+# CaregiverLink: once a code is used, this is the permanent record
 # that "this caregiver can view this patient's data." A caregiver can
 # be linked to multiple patients, and a patient can have multiple
 # caregivers.
