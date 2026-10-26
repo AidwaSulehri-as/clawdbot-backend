@@ -39,6 +39,10 @@ class ReminderHistoryItem(BaseModel):
     task: str
     date: str
     time: str
+    # NEW Oct 27 - optional extras so suggestions can skip reminders that
+    # are already done, or that already repeat every day.
+    completed: int | None = 0
+    repeat_daily: int | None = 0
 
 
 class SuggestionsRequest(BaseModel):
@@ -113,6 +117,8 @@ class ReminderCreate(BaseModel):
     place_lng: float | None = None
     place_radius: int | None = None
     place_trigger: str | None = None
+    # NEW Oct 27 - 1 = remind every day at this time.
+    repeat_daily: int | None = 0
 
 class ReminderResponse(BaseModel):
     id: int
@@ -128,6 +134,8 @@ class ReminderResponse(BaseModel):
     place_lng: float | None = None
     place_radius: int | None = None
     place_trigger: str | None = None
+    # NEW Oct 27 - 1 = remind every day at this time.
+    repeat_daily: int | None = 0
     last_modified: str
 
 # ---------------------------------------------------------------
@@ -185,6 +193,8 @@ class SyncReminderItem(BaseModel):
     place_lng: float | None = None
     place_radius: int | None = None
     place_trigger: str | None = None
+    # NEW Oct 27 - 1 = remind every day at this time.
+    repeat_daily: int | None = 0
     last_modified: str | None = None
 
 class SyncNoteItem(BaseModel):

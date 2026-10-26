@@ -4,7 +4,8 @@
 
  UPDATED Oct 27: reminders got 5 optional place columns
  (place_name, place_lat, place_lng, place_radius, place_trigger) for
- place-based reminders.
+ place-based reminders, and a repeat_daily column (1 = remind every
+ day at the same time).
 =====================================================================
 """
 from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
@@ -45,6 +46,8 @@ class Reminder(Base):
     place_lng = Column(Float, nullable=True)
     place_radius = Column(Integer, nullable=True)    # metres, e.g. 100
     place_trigger = Column(String, nullable=True)    # "arrive" or "leave"
+    # NEW Oct 27 - 1 = repeat this reminder every day, 0/empty = once.
+    repeat_daily = Column(Integer, nullable=True, default=0)
     last_modified = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("User", back_populates="reminders")

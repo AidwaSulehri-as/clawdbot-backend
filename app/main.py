@@ -48,6 +48,8 @@ PLACE_COLUMNS = {
     "place_lng": "FLOAT",
     "place_radius": "INTEGER",
     "place_trigger": "VARCHAR",
+    # NEW Oct 27 - "repeat every day" switch (same kind of optional column).
+    "repeat_daily": "INTEGER DEFAULT 0",
 }
 
 
@@ -64,8 +66,10 @@ _add_missing_reminder_columns()
 
 # Small helpers so every endpoint handles the place fields the same way.
 def _place_fields(item) -> dict:
-    """Pulls the 5 place fields out of a request/sync item."""
+    """Pulls the 5 place fields (and the repeat_daily switch) out of a
+    request/sync item, so every endpoint treats them the same way."""
     return {
+        "repeat_daily": item.repeat_daily or 0,
         "place_name": item.place_name,
         "place_lat": item.place_lat,
         "place_lng": item.place_lng,
@@ -88,6 +92,7 @@ def _reminder_response(r: Reminder) -> ReminderResponse:
         place_lng=r.place_lng,
         place_radius=r.place_radius,
         place_trigger=r.place_trigger,
+        repeat_daily=r.repeat_daily or 0,
         last_modified=r.last_modified.isoformat(),
     )
 
@@ -120,7 +125,16 @@ def parse_reminder(request: ParseReminderRequest):
 
 @app.post("/suggestions", response_model=SuggestionsResponse)
 def suggestions(request: SuggestionsRequest, current_user_email: str = Depends(get_current_user_email)):
-    history_as_dicts = [{"task": i.task, "date": i.date, "time": i.time} for i in request.reminder_history]
+    history_as_dicts = [
+        {
+            "task": i.task,
+            "date": i.date,
+            "time": i.time,
+            "completed": i.completed or 0,
+            "repeat_daily": i.repeat_daily or 0,
+        }
+        for i in request.reminder_history
+    ]
     results = analyze_patterns(history_as_dicts, nearby_object=request.nearby_object)
     return SuggestionsResponse(suggestions=[Suggestion(**s) for s in results])
 
